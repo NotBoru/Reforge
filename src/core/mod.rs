@@ -1,0 +1,9 @@
+pub mod catalog;
+pub mod cleaner;
+pub mod debloater;
+pub mod installer;
+pub mod startup;
+pub mod tweaks;
+pub mod uninstaller;
+pub mod updater;
+pub mod winapi;

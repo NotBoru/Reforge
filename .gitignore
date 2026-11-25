@@ -1,0 +1,7 @@
+/target
+*.pdb
+*.log
+reforge.json
+reforge-profile*.json
+.DS_Store
+Thumbs.db

@@ -1,0 +1,45 @@
+[package]
+name = "reforge"
+version = "1.0.0"
+edition = "2024"
+authors = ["Reforge Contributors"]
+description = "Ultra-fast, zero-dependency portable Windows post-format toolkit: parallel app installer, deep trace uninstaller, updater, cleaner, debloater, startup & tweaks."
+license = "MIT"
+repository = "https://github.com/reforge-win/reforge"
+keywords = ["windows", "portable", "installer", "uninstaller", "cleaner"]
+categories = ["os::windows-apis", "command-line-utilities"]
+build = "build.rs"
+
+[dependencies]
+iced = { version = "0.14.0", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "svg", "tokio", "advanced", "canvas"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["native-tls", "charset", "http2", "system-proxy", "json", "stream", "gzip"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1.12"
+walkdir = "2.5"
+winreg = "0.56"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+dirs = "6"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Dwm",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+    "Win32_Storage_FileSystem",
+    "Win32_NetworkManagement_Dns",
+] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

@@ -1,0 +1,9 @@
+pub mod cleaner;
+pub mod debloater;
+pub mod installer;
+pub mod settings;
+pub mod sidebar;
+pub mod startup;
+pub mod tweaks;
+pub mod uninstaller;
+pub mod updater;
