@@ -1,5 +1,5 @@
 use crate::config::{self, PortableConfig, ReforgeProfile};
-use crate::core::app_icons::{self, RgbaIcon};
+use crate::core::app_icons::{self, IconFetchRequest, RgbaIcon};
 use crate::core::catalog::{catalog, preset_app_ids, AppCategory, CatalogApp, PresetKind};
 use crate::core::cleaner::{self, CleanCategoryId, CleanExecResult, CleanScanResult};
 use crate::core::debloater::{self, BloatPackage, BloatSafety, DeepDebloatAction};
@@ -21,14 +21,61 @@ use crate::ui::theme::{self, ThemeMode, FONT_MEDIUM};
 use crate::ui::views;
 use iced::alignment::Vertical;
 use iced::widget::image::Handle as ImageHandle;
-use iced::widget::scrollable::Viewport;
-use iced::widget::{button, column, container, row, stack, text, Space};
+use iced::widget::scrollable::AbsoluteOffset;
+use iced::widget::{button, column, container, operation, row, stack, text, Id, Space};
 use iced::{window, Element, Length, Padding, Subscription, Task, Theme};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+pub const INSTALLER_ROW_HEIGHT: f32 = 54.0;
+pub const INSTALLER_PAGE_SIZE: usize = 50;
+
+pub fn featured_rank(id: &str) -> usize {
+    const FEATURED_ORDER: &[&str] = &[
+        "claude_desktop",
+        "chatgpt",
+        "cursor",
+        "opencode_desktop",
+        "gemini_desktop",
+        "intellij_idea",
+        "chrome",
+        "brave",
+        "discord",
+        "steam",
+        "hydra",
+        "lunar_client",
+        "cheatbreaker",
+        "minecraft_launcher",
+        "vcredist_2015_x64",
+        "directx_runtime",
+        "vscode",
+        "claude_code",
+        "opencode_cli",
+        "ollama",
+        "7zip",
+        "spotify",
+        "vlc",
+        "ddu",
+        "logitech_ghub",
+        "razer_synapse4",
+        "process_lasso",
+        "msi_afterburner",
+        "obs",
+        "blender",
+        "obsidian",
+        "anki",
+        "git",
+        "powertoys",
+        "everything",
+    ];
+    FEATURED_ORDER
+        .iter()
+        .position(|&x| x == id)
+        .unwrap_or(FEATURED_ORDER.len())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -145,6 +192,8 @@ pub enum Message {
     InstalledIconsLoaded(HashMap<String, RgbaIcon>),
     CatalogIconsStreamDone,
     StartupIconsLoaded(HashMap<String, RgbaIcon>),
+    IconUrlDbLoaded(HashMap<String, String>),
+    IconWorkerClosed,
 
     // System
     RefreshSystemInfo,
@@ -154,13 +203,12 @@ pub enum Message {
     BootstrapWinget,
     BootstrapWingetFinished(Result<String, String>),
 
-    // Installer (Unified Curated + 16,000+ Live WinGet Infinite Scroll)
+    // Installer (Unified Curated + 16,500+ Live WinGet Paginated Catalog)
     InstallerSearchChanged(String),
     InstallerCategoryChanged(AppCategory),
     InstallerFilterChanged(InstallerFilter),
     InstallerSortChanged(InstallerSort),
-    InstallerScrolled(Viewport),
-    InstallerLoadMore,
+    InstallerPageChanged(usize),
     ToggleCatalogApp(&'static str),
     OpenCatalogDetails(&'static CatalogApp),
     ApplyInstallPreset(PresetKind),
@@ -255,19 +303,33 @@ pub struct App {
     pub toast: Option<Toast>,
     pub winget_bootstrapping: bool,
 
-    // Real App Icon Handle Caches
+    // Real App Icon Handle Caches (O(1) zero-allocation lookups in view!)
     installed_icons: HashMap<String, ImageHandle>,
+    installed_name_icons: HashMap<String, ImageHandle>,
+    installed_catalog_ids: HashSet<&'static str>,
+    catalog_native_icons: HashMap<&'static str, ImageHandle>,
     catalog_icons: HashMap<String, ImageHandle>,
     startup_icons: HashMap<String, ImageHandle>,
     catalog_icons_streaming: bool,
     catalog_icon_rx: Option<Arc<Mutex<mpsc::UnboundedReceiver<(String, RgbaIcon)>>>>,
 
-    // Installer (Unified Curated + 16,000+ Live WinGet Catalog)
+    // On-Demand 4-Tier WinGet Icon Engine
+    winget_icon_db: HashMap<String, String>,
+    winget_app_icons: HashMap<String, ImageHandle>,
+    domain_icons: HashMap<String, ImageHandle>,
+    winget_icon_requested: HashSet<String>,
+    pending_winget_icons: usize,
+    icon_req_tx: mpsc::UnboundedSender<IconFetchRequest>,
+    icon_done_rx: Arc<Mutex<mpsc::UnboundedReceiver<(String, Option<RgbaIcon>)>>>,
+
+    // Installer (Crisp 50-Item Paginated Unified Curated + 16,500+ Live WinGet Catalog)
+    pub installer_scroll_id: Id,
     pub installer_search: String,
     pub installer_category: AppCategory,
     pub installer_filter: InstallerFilter,
     pub installer_sort: InstallerSort,
-    pub installer_visible_limit: usize,
+    pub installer_page: usize,
+    pub curated_matched: Vec<&'static CatalogApp>,
     pub selected_catalog_ids: HashSet<&'static str>,
     pub selected_winget_ids: HashMap<String, String>,
     pub winget_full_index: Vec<WingetSearchResult>,
@@ -329,6 +391,7 @@ impl App {
         let mut cfg = config::load_config();
         let mut initial_tab = Tab::Installer;
         let mut initial_search = String::new();
+        let mut initial_page: usize = 1;
         let mut preview_modal_on_load = false;
         let mut check_updates_on_load = false;
         let mut preview_select_installer = false;
@@ -360,6 +423,8 @@ impl App {
                 };
             } else if let Some(q) = arg.strip_prefix("--search=") {
                 initial_search = q.to_string();
+            } else if let Some(pg) = arg.strip_prefix("--page=") {
+                initial_page = pg.parse::<usize>().unwrap_or(1).max(1);
             } else if arg == "--preview-uninstall-modal" {
                 initial_tab = Tab::Uninstaller;
                 preview_modal_on_load = true;
@@ -387,8 +452,10 @@ impl App {
 
         let (icon_tx, icon_rx) = mpsc::unbounded_channel();
         let streaming = !missing_domains.is_empty();
+        let (req_tx, req_rx) = mpsc::unbounded_channel::<IconFetchRequest>();
+        let (done_tx, done_rx) = mpsc::unbounded_channel::<(String, Option<RgbaIcon>)>();
 
-        let app = Self {
+        let mut app = Self {
             active_tab: initial_tab,
             config: cfg,
             sys_info: SystemInfo::default(),
@@ -398,6 +465,9 @@ impl App {
             winget_bootstrapping: false,
 
             installed_icons: HashMap::new(),
+            installed_name_icons: HashMap::new(),
+            installed_catalog_ids: HashSet::new(),
+            catalog_native_icons: HashMap::new(),
             catalog_icons,
             startup_icons: HashMap::new(),
             catalog_icons_streaming: streaming,
@@ -407,11 +477,21 @@ impl App {
                 None
             },
 
+            winget_icon_db: HashMap::new(),
+            winget_app_icons: HashMap::new(),
+            domain_icons: HashMap::new(),
+            winget_icon_requested: HashSet::new(),
+            pending_winget_icons: 0,
+            icon_req_tx: req_tx,
+            icon_done_rx: Arc::new(Mutex::new(done_rx)),
+
+            installer_scroll_id: Id::unique(),
             installer_search: initial_search,
             installer_category: AppCategory::All,
             installer_filter: InstallerFilter::All,
             installer_sort: InstallerSort::Featured,
-            installer_visible_limit: 60,
+            installer_page: initial_page,
+            curated_matched: Vec::new(),
             selected_catalog_ids: HashSet::new(),
             selected_winget_ids: HashMap::new(),
             winget_full_index: Vec::new(),
@@ -496,11 +576,19 @@ impl App {
             ));
         }
 
-        // Automatically index all 16,000+ Microsoft WinGet packages in the background
-        // (<15 ms on warm disk cache) so search & infinite scroll work seamlessly with zero extra clicks!
+        // Automatically index all 16,000+ Microsoft WinGet packages + 5,960+ icon URL DB in parallel,
+        // and run one persistent pooled HTTP/2 on-demand icon worker for visible virtualized rows.
         tasks.push(Task::perform(
             installer::load_full_winget_index(),
             Message::WingetIndexLoaded,
+        ));
+        tasks.push(Task::perform(
+            app_icons::load_icon_url_db(),
+            Message::IconUrlDbLoaded,
+        ));
+        tasks.push(Task::perform(
+            app_icons::run_on_demand_icon_worker(req_rx, done_tx),
+            |_| Message::IconWorkerClosed,
         ));
 
         if initial_tab == Tab::Debloater {
@@ -510,11 +598,11 @@ impl App {
             tasks.push(Task::done(Message::CheckUpdates));
         }
 
-        let mut app = app;
         if preview_select_installer {
             app.selected_catalog_ids.insert("claude_desktop");
             app.selected_catalog_ids.insert("lunar_client");
         }
+        app.refresh_curated_matches();
 
         (app, Task::batch(tasks))
     }
@@ -552,6 +640,7 @@ impl App {
             || self.updates_running
             || self.uninstalling_active
             || self.catalog_icons_streaming
+            || self.pending_winget_icons > 0
         {
             subs.push(iced::time::every(Duration::from_millis(65)).map(|_| Message::PollStreams));
         }
@@ -565,7 +654,7 @@ impl App {
         }
     }
 
-    // ── REAL APP ICON LOOKUP HELPERS ─────────────────────────────────────────
+    // ── O(1) ZERO-ALLOCATION REAL APP ICON LOOKUP HELPERS ────────────────────
 
     pub fn installed_icon(&self, app_id: &str) -> Option<&ImageHandle> {
         self.installed_icons.get(app_id)
@@ -575,42 +664,100 @@ impl App {
         self.startup_icons.get(item_id)
     }
 
-    /// Prefers locally extracted native Win32 logo when installed; falls back to cached vendor logo.
+    /// O(1) lookup: prefers locally extracted native Win32 logo when installed; falls back to cached vendor logo.
     pub fn catalog_icon(&self, item: &CatalogApp) -> Option<&ImageHandle> {
-        if let Some(inst) = self.installed_apps.iter().find(|inst| {
-            let lower = inst.name.to_lowercase();
-            item.detect_keywords
-                .iter()
-                .any(|kw| lower.contains(&kw.to_lowercase()))
-        }) {
-            if let Some(h) = self.installed_icons.get(&inst.id) {
-                return Some(h);
-            }
-        }
-        self.catalog_icons.get(item.id)
+        self.catalog_native_icons
+            .get(item.id)
+            .or_else(|| self.catalog_icons.get(item.id))
     }
 
-    pub fn winget_icon(&self, winget_id: &str, name: &str) -> Option<&ImageHandle> {
-        if let Some(cat) = crate::core::catalog::find_by_winget_id(winget_id) {
-            if let Some(h) = self.catalog_icon(cat) {
+    /// O(1) zero-allocation lookup for virtualized WinGet rows (direct app icon -> shared publisher logo -> local installed icon).
+    pub fn winget_icon(&self, item: &WingetSearchResult) -> Option<&ImageHandle> {
+        if let Some(h) = self.winget_app_icons.get(&item.id) {
+            return Some(h);
+        }
+        if let Some(dom) = app_icons::publisher_known_domain(&item.publisher) {
+            if let Some(h) = self.domain_icons.get(dom) {
                 return Some(h);
             }
         }
-        if let Some(h) = self.catalog_icons.get(&format!("wg_ic_{winget_id}")) {
-            return Some(h);
+        if !item.homepage_domain.is_empty() {
+            if let Some(h) = self.domain_icons.get(&item.homepage_domain) {
+                return Some(h);
+            }
         }
-        let nlow = name.to_lowercase();
-        if nlow.len() >= 3 {
-            if let Some(inst) = self.installed_apps.iter().find(|i| {
-                let ilow = i.name.to_lowercase();
-                ilow == nlow || ilow.starts_with(&format!("{nlow} "))
+        self.installed_name_icons.get(&item.name)
+    }
+
+    /// O(1) lookup (precomputed on InstalledAppsLoaded instead of scanning every frame!).
+    pub fn is_catalog_app_installed(&self, app: &CatalogApp) -> bool {
+        self.installed_catalog_ids.contains(app.id)
+    }
+
+    fn rebuild_installed_lookups(&mut self) {
+        self.installed_catalog_ids.clear();
+        self.catalog_native_icons.clear();
+        self.installed_name_icons.clear();
+
+        let lower_installed: Vec<(&InstalledApp, String)> = self
+            .installed_apps
+            .iter()
+            .map(|a| (a, a.name.to_lowercase()))
+            .collect();
+
+        for (inst, _) in &lower_installed {
+            if let Some(h) = self.installed_icons.get(&inst.id) {
+                self.installed_name_icons
+                    .entry(inst.name.clone())
+                    .or_insert_with(|| h.clone());
+            }
+        }
+
+        for cat in catalog() {
+            if let Some((inst, _)) = lower_installed.iter().find(|(_, lower)| {
+                cat.detect_keywords
+                    .iter()
+                    .any(|kw| lower.contains(&kw.to_lowercase()))
             }) {
+                self.installed_catalog_ids.insert(cat.id);
                 if let Some(h) = self.installed_icons.get(&inst.id) {
-                    return Some(h);
+                    self.catalog_native_icons.insert(cat.id, h.clone());
                 }
             }
         }
-        None
+    }
+
+    fn refresh_curated_matches(&mut self) {
+        let q = self.installer_search.trim().to_lowercase();
+        let mut list: Vec<&'static CatalogApp> = catalog()
+            .iter()
+            .filter(|item| {
+                let cat_ok = !q.is_empty()
+                    || self.installer_category == AppCategory::All
+                    || item.category == self.installer_category;
+                let inst = self.installed_catalog_ids.contains(item.id);
+                let filter_ok = match self.installer_filter {
+                    InstallerFilter::All => true,
+                    InstallerFilter::Installed => inst,
+                    InstallerFilter::NotInstalled => !inst,
+                };
+                let q_ok = q.is_empty()
+                    || item.name.to_lowercase().contains(&q)
+                    || item.publisher.to_lowercase().contains(&q)
+                    || item.desc_en.to_lowercase().contains(&q)
+                    || item.desc_pt.to_lowercase().contains(&q)
+                    || item.winget_id.to_lowercase().contains(&q);
+                cat_ok && filter_ok && q_ok
+            })
+            .collect();
+
+        if self.installer_sort == InstallerSort::Name {
+            list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        } else if self.installer_category == AppCategory::All && q.is_empty() {
+            list.sort_by_key(|a| featured_rank(a.id));
+        }
+
+        self.curated_matched = list;
     }
 
     fn refresh_unified_winget_matches(&mut self) {
@@ -632,7 +779,22 @@ impl App {
                 continue;
             }
             if q.is_empty() {
-                scored.push((0, idx));
+                // Prioritize packages that have real icons (5,960-app icon DB or 105+ known major publishers)
+                // when browsing in Featured mode so thousands of scrolled rows display real logos!
+                let rank = if self.installer_sort == InstallerSort::Featured {
+                    if app_icons::lookup_icon_db_url(&self.winget_icon_db, &item.id, &item.name)
+                        .is_some()
+                    {
+                        0
+                    } else if app_icons::publisher_known_domain(&item.publisher).is_some() {
+                        1
+                    } else {
+                        2
+                    }
+                } else {
+                    0
+                };
+                scored.push((rank, idx));
             } else {
                 let name_l = item.name.to_lowercase();
                 let pub_l = item.publisher.to_lowercase();
@@ -661,11 +823,156 @@ impl App {
                         .cmp(&self.winget_full_index[b.1].name.to_lowercase())
                 })
             });
-        } else if !q.is_empty() {
+        } else {
             scored.sort_by_key(|&(rank, idx)| (rank, idx));
         }
 
         self.winget_matched_indices = scored.into_iter().map(|(_, idx)| idx).collect();
+    }
+
+    pub fn installer_include_winget(&self) -> bool {
+        self.installer_filter != InstallerFilter::Installed
+            && (self.installer_category == AppCategory::All
+                || !self.installer_search.trim().is_empty())
+    }
+
+    /// Lazily resolves real logos ONLY for the WinGet rows on the currently active page (max 50 items).
+    fn queue_visible_winget_icons(&mut self) {
+        if !self.installer_include_winget() || self.winget_matched_indices.is_empty() {
+            return;
+        }
+        let curated_len = self.curated_matched.len();
+        let total = curated_len + self.winget_matched_indices.len();
+        let max_pages = (total.saturating_sub(1) / INSTALLER_PAGE_SIZE) + 1;
+        let page = self.installer_page.clamp(1, max_pages.max(1));
+        let start = (page - 1) * INSTALLER_PAGE_SIZE;
+        let end = (start + INSTALLER_PAGE_SIZE).min(total);
+        if end <= curated_len {
+            return;
+        }
+        let wg_start = start.saturating_sub(curated_len);
+        let wg_end = (end - curated_len).min(self.winget_matched_indices.len());
+
+        for &wg_idx in &self.winget_matched_indices[wg_start..wg_end] {
+            let Some(item) = self.winget_full_index.get(wg_idx) else {
+                continue;
+            };
+            if self.winget_icon(item).is_some() {
+                continue;
+            }
+
+            // Tier 1: Direct exact app icon URL from 5,960-app UniGetUI DB (+ domain/GitHub fallbacks if stale!)
+            if let Some(direct_url) =
+                app_icons::lookup_icon_db_url(&self.winget_icon_db, &item.id, &item.name)
+            {
+                let key = format!("wg:{}", item.id);
+                if self.winget_icon_requested.insert(key.clone()) {
+                    if let Some(cached) = app_icons::load_single_cached_icon(&key) {
+                        self.winget_app_icons
+                            .insert(item.id.clone(), cached.into_handle());
+                    } else {
+                        let mut domains = Vec::new();
+                        if let Some(dom) = app_icons::publisher_known_domain(&item.publisher) {
+                            domains.push(dom.to_string());
+                        }
+                        if !item.homepage_domain.is_empty() {
+                            domains.push(item.homepage_domain.clone());
+                        }
+                        let pub_clean: String = item
+                            .publisher
+                            .chars()
+                            .filter(|c| c.is_ascii_alphanumeric())
+                            .map(|c| c.to_ascii_lowercase())
+                            .collect();
+                        let pkg_clean: String = item
+                            .id
+                            .split_once('.')
+                            .map(|(_, p)| p)
+                            .unwrap_or(&item.name)
+                            .chars()
+                            .filter(|c| c.is_ascii_alphanumeric())
+                            .map(|c| c.to_ascii_lowercase())
+                            .collect();
+                        if pkg_clean.len() >= 3 {
+                            domains.push(format!("{pkg_clean}.com"));
+                        }
+                        if pub_clean.len() >= 3 && pub_clean != pkg_clean {
+                            domains.push(format!("{pub_clean}.com"));
+                        }
+                        self.pending_winget_icons += 1;
+                        let _ = self.icon_req_tx.send(IconFetchRequest {
+                            cache_key: key,
+                            direct_url: Some(direct_url.to_string()),
+                            domains,
+                            github_user: Some(item.publisher.clone()),
+                        });
+                    }
+                }
+                continue;
+            }
+
+            // Tier 2: Shared verified official publisher domain (1 download covers all packages from that vendor!)
+            if let Some(dom) = app_icons::publisher_known_domain(&item.publisher) {
+                let key = format!("dom:{dom}");
+                if self.winget_icon_requested.insert(key.clone()) {
+                    if let Some(cached) = app_icons::load_single_cached_icon(&key) {
+                        self.domain_icons
+                            .insert(dom.to_string(), cached.into_handle());
+                    } else {
+                        self.pending_winget_icons += 1;
+                        let _ = self.icon_req_tx.send(IconFetchRequest {
+                            cache_key: key,
+                            direct_url: None,
+                            domains: vec![dom.to_string()],
+                            github_user: None,
+                        });
+                    }
+                }
+                continue;
+            }
+
+            // Tier 3 & 4: Strict heuristic official domain (404 on miss, zero grey globes) + GitHub org/dev avatar
+            let key = format!("wg:{}", item.id);
+            if self.winget_icon_requested.insert(key.clone()) {
+                if let Some(cached) = app_icons::load_single_cached_icon(&key) {
+                    self.winget_app_icons
+                        .insert(item.id.clone(), cached.into_handle());
+                } else {
+                    let mut domains = Vec::new();
+                    if !item.homepage_domain.is_empty() {
+                        domains.push(item.homepage_domain.clone());
+                    }
+                    let pub_clean: String = item
+                        .publisher
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric())
+                        .map(|c| c.to_ascii_lowercase())
+                        .collect();
+                    let pkg_clean: String = item
+                        .id
+                        .split_once('.')
+                        .map(|(_, p)| p)
+                        .unwrap_or(&item.name)
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric())
+                        .map(|c| c.to_ascii_lowercase())
+                        .collect();
+                    if pkg_clean.len() >= 4 && pkg_clean != pub_clean {
+                        domains.push(format!("{pkg_clean}.com"));
+                    }
+                    if pub_clean.len() >= 4 {
+                        domains.push(format!("{pub_clean}.com"));
+                    }
+                    self.pending_winget_icons += 1;
+                    let _ = self.icon_req_tx.send(IconFetchRequest {
+                        cache_key: key,
+                        direct_url: None,
+                        domains,
+                        github_user: Some(item.publisher.clone()),
+                    });
+                }
+            }
+        }
     }
 
     pub fn update_icon(&self, upd: &AppUpdate) -> Option<&ImageHandle> {
@@ -687,15 +994,6 @@ impl App {
             }
         }
         None
-    }
-
-    pub fn is_catalog_app_installed(&self, app: &CatalogApp) -> bool {
-        self.installed_apps.iter().any(|inst| {
-            let lower = inst.name.to_lowercase();
-            app.detect_keywords
-                .iter()
-                .any(|kw| lower.contains(&kw.to_lowercase()))
-        })
     }
 
     fn open_modal(&mut self, m: ActiveModal) {
@@ -846,6 +1144,7 @@ impl App {
                 for (k, rgba) in map {
                     self.installed_icons.insert(k, rgba.into_handle());
                 }
+                self.rebuild_installed_lookups();
                 Task::none()
             }
             Message::CatalogIconsStreamDone => {
@@ -860,6 +1159,25 @@ impl App {
                 }
                 Task::none()
             }
+            Message::IconUrlDbLoaded(db) => {
+                self.winget_icon_db = db;
+                // Allow unresolved items to retry now that the 5,960+ direct icon DB is loaded
+                self.winget_icon_requested.retain(|k| {
+                    if let Some(wg_id) = k.strip_prefix("wg:") {
+                        self.winget_app_icons.contains_key(wg_id)
+                    } else if let Some(dom) = k.strip_prefix("dom:") {
+                        self.domain_icons.contains_key(dom)
+                    } else {
+                        false
+                    }
+                });
+                if !self.winget_full_index.is_empty() {
+                    self.refresh_unified_winget_matches();
+                    self.queue_visible_winget_icons();
+                }
+                Task::none()
+            }
+            Message::IconWorkerClosed => Task::none(),
 
             // ── BACKGROUND STREAMS ───────────────────────────────────────────
             Message::PollStreams => {
@@ -867,6 +1185,19 @@ impl App {
                     if let Ok(mut rx) = rx_arc.lock() {
                         while let Ok((key, rgba)) = rx.try_recv() {
                             self.catalog_icons.insert(key, rgba.into_handle());
+                        }
+                    }
+                }
+                if let Ok(mut rx) = self.icon_done_rx.lock() {
+                    while let Ok((key, maybe_rgba)) = rx.try_recv() {
+                        self.pending_winget_icons = self.pending_winget_icons.saturating_sub(1);
+                        if let Some(rgba) = maybe_rgba {
+                            let h = rgba.into_handle();
+                            if let Some(dom) = key.strip_prefix("dom:") {
+                                self.domain_icons.insert(dom.to_string(), h);
+                            } else if let Some(wg_id) = key.strip_prefix("wg:") {
+                                self.winget_app_icons.insert(wg_id.to_string(), h);
+                            }
                         }
                     }
                 }
@@ -954,47 +1285,67 @@ impl App {
                 Task::none()
             }
 
-            // ── INSTALLER (UNIFIED CURATED + 16,000+ INFINITE SCROLL) ────────
+            // ── INSTALLER (CRISP 50-ITEM PAGINATED CURATED + 16,500+ WINGET) ─
             Message::InstallerSearchChanged(q) => {
                 self.installer_search = q;
-                self.installer_visible_limit = 60;
+                self.installer_page = 1;
+                self.refresh_curated_matches();
                 self.refresh_unified_winget_matches();
-                Task::none()
+                self.queue_visible_winget_icons();
+                operation::scroll_to(
+                    self.installer_scroll_id.clone(),
+                    AbsoluteOffset { x: 0.0, y: 0.0 },
+                )
             }
             Message::InstallerCategoryChanged(cat) => {
                 self.installer_category = cat;
-                self.installer_visible_limit = 60;
+                self.installer_page = 1;
                 self.motion.clear_hovers();
-                Task::none()
+                self.refresh_curated_matches();
+                self.queue_visible_winget_icons();
+                operation::scroll_to(
+                    self.installer_scroll_id.clone(),
+                    AbsoluteOffset { x: 0.0, y: 0.0 },
+                )
             }
             Message::InstallerFilterChanged(f) => {
                 self.installer_filter = f;
-                self.installer_visible_limit = 60;
+                self.installer_page = 1;
                 self.motion.clear_hovers();
-                Task::none()
+                self.refresh_curated_matches();
+                self.queue_visible_winget_icons();
+                operation::scroll_to(
+                    self.installer_scroll_id.clone(),
+                    AbsoluteOffset { x: 0.0, y: 0.0 },
+                )
             }
             Message::InstallerSortChanged(s) => {
                 self.installer_sort = s;
-                self.installer_visible_limit = 60;
+                self.installer_page = 1;
+                self.refresh_curated_matches();
                 self.refresh_unified_winget_matches();
-                Task::none()
+                self.queue_visible_winget_icons();
+                operation::scroll_to(
+                    self.installer_scroll_id.clone(),
+                    AbsoluteOffset { x: 0.0, y: 0.0 },
+                )
             }
-            Message::InstallerScrolled(vp) => {
-                if vp.content_bounds().height > vp.bounds().height
-                    && vp.relative_offset().y >= 0.80
-                {
-                    let max_total = catalog().len() + self.winget_matched_indices.len();
-                    if self.installer_visible_limit < max_total {
-                        self.installer_visible_limit =
-                            (self.installer_visible_limit + 60).min(max_total);
-                    }
-                }
-                Task::none()
-            }
-            Message::InstallerLoadMore => {
-                let max_total = catalog().len() + self.winget_matched_indices.len();
-                self.installer_visible_limit = (self.installer_visible_limit + 80).min(max_total);
-                Task::none()
+            Message::InstallerPageChanged(page) => {
+                let curated_len = self.curated_matched.len();
+                let wg_len = if self.installer_include_winget() {
+                    self.winget_matched_indices.len()
+                } else {
+                    0
+                };
+                let total = curated_len + wg_len;
+                let max_pages = (total.saturating_sub(1) / INSTALLER_PAGE_SIZE) + 1;
+                self.installer_page = page.clamp(1, max_pages.max(1));
+                self.motion.clear_hovers();
+                self.queue_visible_winget_icons();
+                operation::scroll_to(
+                    self.installer_scroll_id.clone(),
+                    AbsoluteOffset { x: 0.0, y: 0.0 },
+                )
             }
             Message::ToggleCatalogApp(id) => {
                 if !self.selected_catalog_ids.remove(id) {
@@ -1022,6 +1373,7 @@ impl App {
                 if let Ok(items) = res {
                     self.winget_full_index = items;
                     self.refresh_unified_winget_matches();
+                    self.queue_visible_winget_icons();
                 }
                 Task::none()
             }
@@ -1142,6 +1494,8 @@ impl App {
                     .retain(|id| valid_ids.contains(id));
 
                 self.installed_apps = apps;
+                self.rebuild_installed_lookups();
+                self.refresh_curated_matches();
 
                 if self.preview_modal_on_load && self.installed_apps.len() >= 3 {
                     self.preview_modal_on_load = false;

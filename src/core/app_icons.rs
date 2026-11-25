@@ -155,7 +155,7 @@ fn decode_image_file(path: &Path) -> Option<RgbaIcon> {
 pub fn decode_image_bytes(bytes: &[u8]) -> Option<RgbaIcon> {
     let img = image::load_from_memory(bytes).ok()?;
     let rgba = if img.width() > 64 || img.height() > 64 {
-        img.resize_exact(64, 64, image::imageops::FilterType::Lanczos3)
+        img.resize(64, 64, image::imageops::FilterType::Triangle)
             .to_rgba8()
     } else {
         img.to_rgba8()
@@ -617,8 +617,9 @@ pub async fn stream_missing_web_icons(
                 .collect();
             let cache_path = dir.join(format!("{safe}.bin"));
             let urls = [
-                format!("https://www.google.com/s2/favicons?domain={domain}&sz=64"),
+                format!("https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://{domain}&size=64"),
                 format!("https://icons.duckduckgo.com/ip3/{domain}.ico"),
+                format!("https://www.google.com/s2/favicons?domain={domain}&sz=64"),
             ];
             for url in urls {
                 if let Ok(resp) = c.get(&url).send().await {
@@ -640,6 +641,422 @@ pub async fn stream_missing_web_icons(
 
     for h in handles {
         let _ = h.await;
+    }
+}
+
+// ── 4-TIER ON-DEMAND WINGET ICON RESOLVER ────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct IconFetchRequest {
+    pub cache_key: String,
+    pub direct_url: Option<String>,
+    pub domains: Vec<String>,
+    pub github_user: Option<String>,
+}
+
+fn sanitize_cache_key(key: &str) -> String {
+    key.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// Instant synchronous check of `%TEMP%\Reforge\icon_cache\<key>.bin` (<0.2 ms).
+pub fn load_single_cached_icon(cache_key: &str) -> Option<RgbaIcon> {
+    let path = icon_cache_dir().join(format!("{}.bin", sanitize_cache_key(cache_key)));
+    let bytes = fs::read(path).ok()?;
+    decode_image_bytes(&bytes)
+}
+
+#[derive(serde::Deserialize)]
+struct IconDbRoot {
+    #[serde(default)]
+    icons_and_screenshots: HashMap<String, IconDbEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct IconDbEntry {
+    #[serde(default)]
+    icon: String,
+}
+
+/// Downloads and 7-day caches the open-source 5,960+ WinGet package icon URL database (<20 ms warm load).
+pub async fn load_icon_url_db() -> HashMap<String, String> {
+    let cache_path = std::env::temp_dir()
+        .join("Reforge")
+        .join("icon_db_v1.json");
+
+    let raw_json = if let Ok(meta) = tokio::fs::metadata(&cache_path).await {
+        if let Ok(modified) = meta.modified() {
+            if modified.elapsed().unwrap_or(Duration::MAX) < Duration::from_secs(7 * 86_400) {
+                tokio::fs::read_to_string(&cache_path).await.ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let text = match raw_json {
+        Some(t) if t.len() > 10_000 => t,
+        _ => {
+            let Ok(client) = Client::builder()
+                .user_agent("Reforge/1.2")
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(10))
+                .build()
+            else {
+                return HashMap::new();
+            };
+            let url = "https://raw.githubusercontent.com/marticliment/UniGetUI/main/WebBasedData/screenshot-database-v2.json";
+            match client.get(url).send().await {
+                Ok(resp) if resp.status().is_success() => match resp.text().await {
+                    Ok(body) if body.len() > 10_000 => {
+                        if let Some(parent) = cache_path.parent() {
+                            let _ = tokio::fs::create_dir_all(parent).await;
+                        }
+                        let _ = tokio::fs::write(&cache_path, &body).await;
+                        body
+                    }
+                    _ => return HashMap::new(),
+                },
+                _ => return HashMap::new(),
+            }
+        }
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let Ok(parsed) = serde_json::from_str::<IconDbRoot>(&text) else {
+            return HashMap::new();
+        };
+        let mut map = HashMap::with_capacity(parsed.icons_and_screenshots.len());
+        for (k, v) in parsed.icons_and_screenshots {
+            if v.icon.starts_with("http")
+                && !v.icon.ends_with(".svg")
+                && !v.icon.contains("imgur.com/")
+            {
+                map.insert(k.to_lowercase(), v.icon);
+            }
+        }
+        map
+    })
+    .await
+    .unwrap_or_default()
+}
+
+fn slug_dash(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = true;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
+fn slug_alnum(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Fast O(1) lookup against the 5,960+ direct icon URL database.
+pub fn lookup_icon_db_url<'a>(
+    db: &'a HashMap<String, String>,
+    winget_id: &str,
+    name: &str,
+) -> Option<&'a str> {
+    if db.is_empty() {
+        return None;
+    }
+    // 1. Exact publisher/package (e.g. "edde746/plezy")
+    let slash_key = winget_id.replace('.', "/").to_lowercase();
+    if let Some(u) = db.get(&slash_key) {
+        return Some(u.as_str());
+    }
+    // 2. Full ID dashed/alnum (e.g. "jetbrains-rider", "jetbrainstoolbox")
+    let full_dash = slug_dash(winget_id);
+    if let Some(u) = db.get(&full_dash) {
+        return Some(u.as_str());
+    }
+    let full_alnum = slug_alnum(winget_id);
+    if let Some(u) = db.get(&full_alnum) {
+        return Some(u.as_str());
+    }
+    // 3. Package suffix after publisher dot (e.g. "7zip", "blender", "obs-studio")
+    if let Some((_, pkg_part)) = winget_id.split_once('.') {
+        let pkg_dash = slug_dash(pkg_part);
+        if let Some(u) = db.get(&pkg_dash) {
+            return Some(u.as_str());
+        }
+        let pkg_alnum = slug_alnum(pkg_part);
+        if let Some(u) = db.get(&pkg_alnum) {
+            return Some(u.as_str());
+        }
+    }
+    // 4. Normalized display name
+    let name_dash = slug_dash(name);
+    if let Some(u) = db.get(&name_dash) {
+        return Some(u.as_str());
+    }
+    let name_alnum = slug_alnum(name);
+    if let Some(u) = db.get(&name_alnum) {
+        return Some(u.as_str());
+    }
+    None
+}
+
+/// Maps the top 100+ WinGet publishers directly to their verified official domain so thousands
+/// of packages share one instant cached official logo with zero redundant downloads.
+pub fn publisher_known_domain(publisher: &str) -> Option<&'static str> {
+    match publisher.to_lowercase().as_str() {
+        "microsoft" => Some("microsoft.com"),
+        "mozilla" => Some("mozilla.org"),
+        "google" => Some("google.com"),
+        "jetbrains" => Some("jetbrains.com"),
+        "kde" => Some("kde.org"),
+        "adobe" => Some("adobe.com"),
+        "nvidia" => Some("nvidia.com"),
+        "amd" => Some("amd.com"),
+        "intel" => Some("intel.com"),
+        "valve" => Some("steampowered.com"),
+        "epicgames" => Some("epicgames.com"),
+        "riotgames" => Some("riotgames.com"),
+        "electronicarts" => Some("ea.com"),
+        "ubisoft" => Some("ubisoft.com"),
+        "blizzard" => Some("blizzard.com"),
+        "logitech" => Some("logitech.com"),
+        "razerinc" => Some("razer.com"),
+        "corsair" => Some("corsair.com"),
+        "steelseries" => Some("steelseries.com"),
+        "asus" => Some("asus.com"),
+        "lenovo" => Some("lenovo.com"),
+        "dell" => Some("dell.com"),
+        "hp" => Some("hp.com"),
+        "oracle" => Some("oracle.com"),
+        "eclipseadoptium" => Some("adoptium.net"),
+        "azul" => Some("azul.com"),
+        "bellsoft" => Some("bell-sw.com"),
+        "python" => Some("python.org"),
+        "openjs" => Some("nodejs.org"),
+        "rustlang" => Some("rust-lang.org"),
+        "golang" => Some("go.dev"),
+        "docker" => Some("docker.com"),
+        "git" => Some("git-scm.com"),
+        "github" => Some("github.com"),
+        "anthropic" => Some("claude.ai"),
+        "openai" => Some("openai.com"),
+        "anysphere" => Some("cursor.com"),
+        "anomaly" => Some("opencode.ai"),
+        "codeium" => Some("windsurf.com"),
+        "ollama" => Some("ollama.com"),
+        "discord" => Some("discord.com"),
+        "telegram" => Some("telegram.org"),
+        "slacktechnologies" => Some("slack.com"),
+        "zoom" => Some("zoom.us"),
+        "spotify" => Some("spotify.com"),
+        "videolan" => Some("videolan.org"),
+        "obsproject" => Some("obsproject.com"),
+        "blenderfoundation" => Some("blender.org"),
+        "gimp" => Some("gimp.org"),
+        "inkscape" => Some("inkscape.org"),
+        "figma" => Some("figma.com"),
+        "notion" => Some("notion.so"),
+        "obsidian" => Some("obsidian.md"),
+        "bitwarden" => Some("bitwarden.com"),
+        "proton" => Some("proton.me"),
+        "cloudflare" => Some("cloudflare.com"),
+        "tailscale" => Some("tailscale.com"),
+        "amazon" => Some("amazon.com"),
+        "ibm" => Some("ibm.com"),
+        "alibaba" => Some("alibaba.com"),
+        "bytedance" => Some("bytedance.com"),
+        "tencent" => Some("tencent.com"),
+        "huawei" => Some("huawei.com"),
+        "wondershare" => Some("wondershare.com"),
+        "nirsoft" => Some("nirsoft.net"),
+        "vovsoft" => Some("vovsoft.com"),
+        "altova" => Some("altova.com"),
+        "7zip" => Some("7-zip.org"),
+        "rarlab" => Some("win-rar.com"),
+        "notepad++" => Some("notepad-plus-plus.org"),
+        "voidtools" => Some("voidtools.com"),
+        "apache" => Some("apache.org"),
+        "canonical" => Some("ubuntu.com"),
+        "redhat" => Some("redhat.com"),
+        "hashicorp" => Some("hashicorp.com"),
+        "unity" => Some("unity.com"),
+        "godotengine" => Some("godotengine.org"),
+        "autodesk" => Some("autodesk.com"),
+        "elgato" => Some("elgato.com"),
+        "vb-audio" => Some("vb-audio.com"),
+        "samsung" => Some("samsung.com"),
+        "sony" => Some("sony.com"),
+        "xiaomi" => Some("mi.com"),
+        "diskinternals" => Some("diskinternals.com"),
+        "flexense" => Some("flexense.com"),
+        "thorlabs" => Some("thorlabs.com"),
+        "binarymark" => Some("binarymark.com"),
+        "japplis" => Some("japplis.com"),
+        "lsofttechnologies" => Some("lsoft.net"),
+        "softsea" => Some("softsea.com"),
+        "realvnc" => Some("realvnc.com"),
+        "teamviewer" => Some("teamviewer.com"),
+        "anydesksoftwaregmbh" => Some("anydesk.com"),
+        "dropbox" => Some("dropbox.com"),
+        "brave" => Some("brave.com"),
+        "opera" => Some("opera.com"),
+        "vivaldi" => Some("vivaldi.com"),
+        "zen-team" => Some("zen-browser.app"),
+        "agilebits" => Some("1password.com"),
+        "doist" => Some("todoist.com"),
+        "thedocumentfoundation" => Some("libreoffice.org"),
+        "onlyoffice" => Some("onlyoffice.com"),
+        "moonsworth" => Some("lunarclient.com"),
+        "hydralauncher" => Some("hydralauncher.gg"),
+        "badlion" => Some("badlion.net"),
+        "modrinth" => Some("modrinth.com"),
+        "curseforge" => Some("curseforge.com"),
+        "audacity" => Some("audacityteam.org"),
+        "handbrake" => Some("handbrake.fr"),
+        "sharex" => Some("getsharex.com"),
+        "qbittorrent" => Some("qbittorrent.org"),
+        "winscp" => Some("winscp.net"),
+        "wiresharkfoundation" => Some("wireshark.org"),
+        "postman" => Some("postman.com"),
+        "insomnia" => Some("insomnia.rest"),
+        "dbeaver" => Some("dbeaver.io"),
+        "cockos" => Some("reaper.fm"),
+        "anki" => Some("apps.ankiweb.net"),
+        "digitalscholar" => Some("zotero.org"),
+        "logseq" => Some("logseq.com"),
+        "calibre" => Some("calibre-ebook.com"),
+        "geogebra" => Some("geogebra.org"),
+        "aomei" => Some("aomeitech.com"),
+        "aimp" => Some("aimp.ru"),
+        "alcpu" => Some("alcpu.com"),
+        "atlauncher" => Some("atlauncher.com"),
+        "agfeo" => Some("agfeo.de"),
+        "acrosssecurity" => Some("0patch.com"),
+        "awp" => Some("atlantiswordprocessor.com"),
+        "cpuid" => Some("cpuid.com"),
+        "crystaldewworld" => Some("crystalmark.info"),
+        "foxit" => Some("foxit.com"),
+        "filezilla" => Some("filezilla-project.org"),
+        "irfanview" => Some("irfanview.com"),
+        "kicad" => Some("kicad.org"),
+        "kodi" => Some("kodi.tv"),
+        "malwarebytes" => Some("malwarebytes.com"),
+        "nextcloud" => Some("nextcloud.com"),
+        "openvpn" => Some("openvpn.net"),
+        "plex" => Some("plex.tv"),
+        "realix" => Some("hwinfo.com"),
+        "sublimetext" => Some("sublimetext.com"),
+        "synology" => Some("synology.com"),
+        "veracrypt" => Some("veracrypt.fr"),
+        "vmware" => Some("vmware.com"),
+        "easeus" => Some("easeus.com"),
+        "faststone" => Some("faststone.org"),
+        _ => None,
+    }
+}
+
+/// Single persistent background HTTP/2 icon resolver for visible virtualized WinGet rows.
+/// Never blocks the UI, caches every hit to disk, and strictly rejects missing icons (HTTP 404).
+pub async fn run_on_demand_icon_worker(
+    mut req_rx: mpsc::UnboundedReceiver<IconFetchRequest>,
+    out_tx: mpsc::UnboundedSender<(String, Option<RgbaIcon>)>,
+) {
+    let cache_dir = icon_cache_dir();
+    let _ = tokio::fs::create_dir_all(&cache_dir).await;
+
+    let Ok(client) = Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .connect_timeout(Duration::from_millis(2200))
+        .timeout(Duration::from_millis(2800))
+        .pool_max_idle_per_host(20)
+        .build()
+    else {
+        return;
+    };
+
+    let client = Arc::new(client);
+    let sem = Arc::new(Semaphore::new(20));
+
+    while let Some(req) = req_rx.recv().await {
+        let c = Arc::clone(&client);
+        let s = Arc::clone(&sem);
+        let dir = cache_dir.clone();
+        let tx = out_tx.clone();
+
+        tokio::spawn(async move {
+            let Ok(_permit) = s.acquire_owned().await else {
+                return;
+            };
+            let cache_path = dir.join(format!("{}.bin", sanitize_cache_key(&req.cache_key)));
+
+            // Re-check disk cache in case another request populated the same shared key
+            if let Ok(bytes) = tokio::fs::read(&cache_path).await {
+                if let Some(ic) = decode_image_bytes(&bytes) {
+                    let _ = tx.send((req.cache_key, Some(ic)));
+                    return;
+                }
+            }
+
+            let mut candidate_urls: Vec<String> = Vec::with_capacity(6);
+            if let Some(u) = req.direct_url {
+                candidate_urls.push(u);
+            }
+            for dom in &req.domains {
+                candidate_urls.push(format!(
+                    "https://t2.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://{dom}&size=64"
+                ));
+            }
+            if let Some(first_dom) = req.domains.first() {
+                candidate_urls.push(format!("https://icons.duckduckgo.com/ip3/{first_dom}.ico"));
+            }
+            if let Some(gh) = req.github_user {
+                if gh.len() >= 2
+                    && gh.len() <= 39
+                    && gh.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+                {
+                    candidate_urls.push(format!("https://github.com/{gh}.png?size=64"));
+                }
+            }
+
+            for url in candidate_urls {
+                if let Ok(resp) = c.get(&url).send().await {
+                    if resp.status().is_success() {
+                        if let Ok(bytes) = resp.bytes().await {
+                            if bytes.len() > 80 && bytes.len() < 2_500_000 {
+                                let cloned = bytes.to_vec();
+                                let decoded = tokio::task::spawn_blocking(move || {
+                                    decode_image_bytes(&cloned)
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                if let Some(ic) = decoded {
+                                    let _ = tokio::fs::write(&cache_path, &bytes).await;
+                                    let _ = tx.send((req.cache_key, Some(ic)));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let _ = tx.send((req.cache_key, None));
+        });
     }
 }
 

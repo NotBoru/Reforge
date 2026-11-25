@@ -6,9 +6,9 @@
 
 Install **190+ curated apps, AI tools, JetBrains IDEs, peripheral drivers, runtimes & gaming launchers** seamlessly unified with **16,500+ live Microsoft WinGet packages** (infinite scroll & instant as-you-type search), safely close & deep-uninstall applications with leftover trace cleanup, update outdated software, wipe temp & cache junk across all CPU cores, deep-debloat Windows, manage startup programs, and apply **26 high-impact verified optimizations** — all inside **one standalone native Rust executable**.
 
-[![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-FFC799?style=flat-square&logo=windows)](https://github.com/reforge-win/reforge/releases)
+[![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-FFC799?style=flat-square&logo=windows)](https://github.com/NotBoru/Reforge/releases)
 [![Built with Rust](https://img.shields.io/badge/Rust-100%25%20Native-101010?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![Portable](https://img.shields.io/badge/Portable-Zero%20Dependencies-99FFE4?style=flat-square)](https://github.com/reforge-win/reforge/releases)
+[![Portable](https://img.shields.io/badge/Portable-Zero%20Dependencies-99FFE4?style=flat-square)](https://github.com/NotBoru/Reforge/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-5E636E?style=flat-square)](LICENSE)
 
 <br/>
@@ -110,7 +110,7 @@ Renderer:      wgpu (DX12/Vulkan/DX11) with automatic tiny-skia CPU fallback —
 
 ## Quick Start
 
-Download `Reforge-x64-portable.exe` from [GitHub Releases](https://github.com/reforge-win/reforge/releases) and run directly — no installer or dependencies required.
+Download `Reforge-x64-portable.exe` from [GitHub Releases](https://github.com/NotBoru/Reforge/releases) and run directly — no installer or dependencies required.
 
 ### Optional CLI Launch Flags
 ```powershell
@@ -126,7 +126,7 @@ Supported tabs: `installer`, `updater`, `uninstaller`, `cleaner`, `debloater`, `
 ## Build from Source
 
 ```powershell
-git clone https://github.com/reforge-win/reforge.git
+git clone https://github.com/NotBoru/Reforge.git
 cd reforge
 
 cargo test --locked
