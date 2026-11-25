@@ -109,7 +109,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             p,
             motion::spinner(app.motion.spinner_phase, 22.0, p.accent, p.hairline),
             s.scanning,
-            "Querying available package versions",
+            "",
         ));
     } else if !app.updates_checked_once {
         body = body.push(empty_state(
@@ -126,7 +126,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             s.up_to_date_sub,
         ));
     } else {
-        // Calm borderless rows — NEVER paint a wall of colored rows when all 47 are checked!
         let rows: Vec<Element<'a, Message>> = app
             .updates
             .iter()

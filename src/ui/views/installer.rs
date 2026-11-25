@@ -1,15 +1,11 @@
-use crate::app::{
-    App, InstallTaskState, InstallerFilter, InstallerSort, Message, INSTALLER_PAGE_SIZE,
-    INSTALLER_ROW_HEIGHT,
-};
-use crate::core::catalog::{catalog, AppCategory, CatalogApp, PresetKind};
+use crate::app::{App, InstallTaskState, InstallerFilter, Message, INSTALLER_PAGE_SIZE};
+use crate::core::catalog::{catalog, AppCategory, CatalogApp};
 use crate::core::installer::{InstallStage, WingetSearchResult};
 use crate::core::winapi::{format_bytes, format_speed};
 use crate::i18n::{tr, Lang};
 use crate::ui::components::{
     app_logo, checkbox_box, clean_list, destructive_subtle_button, empty_state, h_divider,
-    hover_row, page_header, primary_button, search_bar, secondary_button, segmented_control,
-    soft_panel, status_dot,
+    hover_row, page_header, primary_button, search_bar, segmented_control, soft_panel, status_dot,
 };
 use crate::ui::icons;
 use crate::ui::motion;
@@ -117,7 +113,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         },
     ));
 
-    let header = page_header(p, s.installer_title, s.installer_sub, header_actions.into());
+    let header = page_header(p, s.installer_title, "", header_actions.into());
 
     let filter_seg = segmented_control(
         p,
@@ -139,21 +135,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             ),
         ],
     );
-    let sort_seg = segmented_control(
-        p,
-        vec![
-            (
-                s.sort_featured,
-                app.installer_sort == InstallerSort::Featured,
-                Message::InstallerSortChanged(InstallerSort::Featured),
-            ),
-            (
-                s.sort_name,
-                app.installer_sort == InstallerSort::Name,
-                Message::InstallerSortChanged(InstallerSort::Name),
-            ),
-        ],
-    );
 
     let search_strip = row![
         search_bar(
@@ -164,9 +145,8 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             Message::InstallerSearchChanged(String::new()),
         ),
         filter_seg,
-        sort_seg,
     ]
-    .spacing(8)
+    .spacing(10)
     .align_y(Vertical::Center);
 
     let mut cat_row = row![].spacing(2).align_y(Vertical::Center);
@@ -179,10 +159,10 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 button(
                     text(cat_label(cat, app.config.lang))
                         .font(if active { FONT_SEMIBOLD } else { FONT_MEDIUM })
-                        .size(11.5)
+                        .size(12)
                         .color(if active { p.accent } else { p.text_secondary }),
                 )
-                .padding([5, 7])
+                .padding([5, 9])
                 .style(theme::btn_nav_animated(p, active, ht))
                 .on_press(Message::InstallerCategoryChanged(cat)),
             )
@@ -191,38 +171,13 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         );
     }
 
-    let preset_link = |kind: PresetKind, label: &'a str| {
-        button(
-            text(label)
-                .font(FONT_MEDIUM)
-                .size(11.5)
-                .color(p.text_muted),
-        )
-        .padding([4, 6])
-        .style(theme::btn_ghost(p))
-        .on_press(Message::ApplyInstallPreset(kind))
-    };
-
-    let cat_and_presets = row![
-        cat_row,
-        Space::new().width(Length::Fill),
-        preset_link(PresetKind::Ai, s.preset_ai),
-        preset_link(PresetKind::Dependencies, s.preset_deps),
-        preset_link(PresetKind::Essentials, s.preset_essentials),
-        preset_link(PresetKind::Gaming, s.preset_gaming),
-        preset_link(PresetKind::Developer, s.preset_developer),
-    ]
-    .spacing(2)
-    .align_y(Vertical::Center);
-
-    let toolbar = container(column![search_strip, cat_and_presets].spacing(9)).padding(Padding {
+    let toolbar = container(column![search_strip, cat_row].spacing(10)).padding(Padding {
         top: 0.0,
         right: 24.0,
         bottom: 12.0,
         left: 24.0,
     });
 
-    // ── CRISP 50-ITEM PAGINATED UNIFIED CATALOG (THICK SCROLLBAR, 0ms LAG) ───
     let curated_len = app.curated_matched.len();
     let include_winget = app.installer_include_winget();
     let winget_len = if include_winget {
@@ -236,7 +191,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
 
     let mut page_col = column![header, toolbar, h_divider(p)].height(Length::Fill);
 
-    // Keep active installation queue pinned cleanly above the list
     if !app.install_queue.is_empty() {
         page_col = page_col
             .push(container(view_install_queue(app, p)).padding(Padding {
@@ -254,7 +208,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 p,
                 motion::spinner(app.motion.spinner_phase, 22.0, p.accent, p.hairline),
                 s.scanning,
-                "Indexing 16,000+ Microsoft WinGet packages...",
+                "",
             )
         } else {
             empty_state(
@@ -285,100 +239,51 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         }
 
         let footer: Element<'a, Message> = if total_pages > 1 {
-            let prev_lbl = if app.config.lang == Lang::PtBr {
-                "← Anterior"
-            } else {
-                "← Previous"
-            };
-            let next_lbl = if app.config.lang == Lang::PtBr {
-                "Próxima →"
-            } else {
-                "Next →"
-            };
-            let page_meta = if app.config.lang == Lang::PtBr {
-                format!(
-                    "Página {} de {}  ·  {} pacotes",
-                    page,
-                    format_count(total_pages),
-                    format_count(total_rows)
-                )
-            } else {
-                format!(
-                    "Page {} of {}  ·  {} packages",
-                    page,
-                    format_count(total_pages),
-                    format_count(total_rows)
-                )
-            };
-
-            container(
-                row![
-                    secondary_button(
-                        p,
-                        prev_lbl.into(),
-                        None,
-                        if page > 1 {
-                            Some(Message::InstallerPageChanged(page - 1))
-                        } else {
-                            None
-                        },
-                    ),
-                    Space::new().width(Length::Fill),
-                    text(page_meta)
-                        .font(FONT_REGULAR)
-                        .size(12)
-                        .color(p.text_muted),
-                    Space::new().width(Length::Fill),
-                    secondary_button(
-                        p,
-                        next_lbl.into(),
-                        None,
-                        if page < total_pages {
-                            Some(Message::InstallerPageChanged(page + 1))
-                        } else {
-                            None
-                        },
-                    ),
-                ]
-                .align_y(Vertical::Center),
-            )
-            .width(Length::Fill)
-            .padding(Padding {
-                top: 14.0,
-                right: 6.0,
-                bottom: 4.0,
-                left: 6.0,
-            })
-            .into()
+            let meta = format!(
+                "{page} / {}  ·  {}",
+                format_count(total_pages),
+                format_count(total_rows)
+            );
+            let mut r = row![].spacing(10).align_y(Vertical::Center);
+            if page > 1 {
+                r = r.push(
+                    button(text("‹").font(FONT_SEMIBOLD).size(14).color(p.text_secondary))
+                        .padding([2, 8])
+                        .style(theme::btn_ghost(p))
+                        .on_press(Message::InstallerPageChanged(page - 1)),
+                );
+            }
+            r = r.push(text(meta).font(FONT_REGULAR).size(11.5).color(p.text_muted));
+            if page < total_pages {
+                r = r.push(
+                    button(text("›").font(FONT_SEMIBOLD).size(14).color(p.text_secondary))
+                        .padding([2, 8])
+                        .style(theme::btn_ghost(p))
+                        .on_press(Message::InstallerPageChanged(page + 1)),
+                );
+            }
+            container(r)
+                .width(Length::Fill)
+                .center_x(Length::Fill)
+                .padding([10, 0])
+                .into()
         } else {
-            let footer_txt = if app.winget_searching {
-                if app.config.lang == Lang::PtBr {
-                    "Indexando +16.000 pacotes WinGet em segundo plano...".to_string()
-                } else {
-                    "Indexing 16,000+ Microsoft WinGet packages in the background...".to_string()
-                }
-            } else if app.config.lang == Lang::PtBr {
-                format!("{} pacotes encontrados", format_count(total_rows))
+            let lbl = if app.winget_searching {
+                s.scanning.to_string()
             } else {
-                format!("{} packages matched", format_count(total_rows))
+                format_count(total_rows)
             };
-
-            container(
-                text(footer_txt)
-                    .font(FONT_REGULAR)
-                    .size(11.5)
-                    .color(p.text_muted),
-            )
-            .width(Length::Fill)
-            .center_x(Length::Fill)
-            .padding([12, 0])
-            .into()
+            container(text(lbl).font(FONT_REGULAR).size(11.5).color(p.text_muted))
+                .width(Length::Fill)
+                .center_x(Length::Fill)
+                .padding([10, 0])
+                .into()
         };
 
         container(column![clean_list(rows), footer].spacing(4))
             .width(Length::Fill)
             .padding(Padding {
-                top: 12.0 + app.motion.tab_offset_y(),
+                top: 12.0,
                 right: 20.0,
                 bottom: 20.0,
                 left: 20.0,
@@ -389,6 +294,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     let scroll = scrollable(scroll_body)
         .id(app.installer_scroll_id.clone())
         .height(Length::Fill)
+        .on_scroll(Message::InstallerScrolled)
         .style(theme::scrollable_style(p));
 
     page_col.push(scroll).into()
@@ -440,8 +346,7 @@ fn view_catalog_row<'a>(
         .align_y(Vertical::Center),
     )
     .width(Length::Fill)
-    .height(Length::Fixed(INSTALLER_ROW_HEIGHT))
-    .padding([0, 12])
+    .padding([9, 12])
     .style(theme::btn_transparent(p))
     .on_press(Message::ToggleCatalogApp(item.id));
 
@@ -450,7 +355,7 @@ fn view_catalog_row<'a>(
         .style(theme::btn_ghost(p))
         .on_press(Message::OpenCatalogDetails(item));
 
-    container(hover_row(
+    hover_row(
         p,
         ht,
         selected,
@@ -459,10 +364,7 @@ fn view_catalog_row<'a>(
         row![main_btn, info_btn]
             .align_y(Vertical::Center)
             .into(),
-    ))
-    .height(Length::Fixed(INSTALLER_ROW_HEIGHT))
-    .width(Length::Fill)
-    .into()
+    )
 }
 
 fn view_winget_row<'a>(
@@ -514,22 +416,18 @@ fn view_winget_row<'a>(
         .align_y(Vertical::Center),
     )
     .width(Length::Fill)
-    .height(Length::Fixed(INSTALLER_ROW_HEIGHT))
-    .padding([0, 12])
+    .padding([9, 12])
     .style(theme::btn_transparent(p))
     .on_press(Message::ToggleWingetApp(item.id.clone(), item.name.clone()));
 
-    container(hover_row(
+    hover_row(
         p,
         ht,
         selected,
         Message::HoverEnter(hkey.clone()),
         Message::HoverExit(hkey),
         inner.into(),
-    ))
-    .height(Length::Fixed(INSTALLER_ROW_HEIGHT))
-    .width(Length::Fill)
-    .into()
+    )
 }
 
 fn view_install_queue<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {

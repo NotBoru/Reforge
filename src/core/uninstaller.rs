@@ -230,9 +230,9 @@ fn format_reg_date(raw: &str) -> String {
     }
 }
 
-// ── SAFE PROCESS DISCOVERY & GRACEFUL SHUTDOWN LIFECYCLE ─────────────────────
+// Process discovery and shutdown helpers.
 
-/// Hardcoded critical Windows system executables that Reforge will NEVER touch.
+/// Critical Windows system executables that must not be terminated.
 const CRITICAL_SYSTEM_PROCESSES: &[&str] = &[
     "system",
     "registry",
@@ -603,7 +603,7 @@ pub fn force_remove_uninstall_entry(app: &InstalledApp) -> Result<(), String> {
         .map_err(|e| format!("Could not remove registry key (Admin may be required): {e}"))
 }
 
-// ── REVO-STYLE DEEP TRACE SCANNER ────────────────────────────────────────────
+// Leftover trace scanner.
 
 const PROTECTED_TOKENS: &[&str] = &[
     "windows",
@@ -813,7 +813,7 @@ pub fn deep_scan_traces_multi(apps: &[InstalledApp]) -> Vec<AppTrace> {
     all
 }
 
-/// Revo-style parallel leftover trace scan across Filesystem, Registry, Shortcuts, Tasks & Services.
+/// Parallel leftover trace scan across filesystem, registry, shortcuts, tasks, and services.
 pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
     let tokens = build_search_tokens(app);
     let mut traces: Vec<AppTrace> = Vec::new();

@@ -644,7 +644,7 @@ pub async fn stream_missing_web_icons(
     }
 }
 
-// ── 4-TIER ON-DEMAND WINGET ICON RESOLVER ────────────────────────────────────
+// On-demand WinGet icon resolver.
 
 #[derive(Debug, Clone)]
 pub struct IconFetchRequest {

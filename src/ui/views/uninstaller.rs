@@ -145,10 +145,15 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             "",
         ));
     } else {
+        let pt = app.config.lang == crate::i18n::Lang::PtBr;
         let col_header = container(
             row![
                 Space::new().width(Length::Fixed(56.0)),
-                text(format!("Application ({})", filtered.len()))
+                text(format!(
+                    "{} ({})",
+                    if pt { "Aplicativo" } else { "Application" },
+                    filtered.len()
+                ))
                     .font(FONT_MEDIUM)
                     .size(11)
                     .color(p.text_muted)

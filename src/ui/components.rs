@@ -119,7 +119,6 @@ pub fn status_dot<'a, M: 'a>(color: Color, label: Option<&'a str>, p: Palette) -
     }
 }
 
-/// Clean borderless list stack (zero visible row separators, subtle 3px breathing rhythm).
 pub fn clean_list<'a, M: 'a>(rows: Vec<Element<'a, M>>) -> Element<'a, M> {
     let mut col = column![].spacing(3).width(Length::Fill);
     for r in rows {
@@ -128,7 +127,6 @@ pub fn clean_list<'a, M: 'a>(rows: Vec<Element<'a, M>>) -> Element<'a, M> {
     col.into()
 }
 
-/// Subtle panel container with soft inner padding and zero hard horizontal row separators.
 pub fn soft_panel<'a, M: 'a>(p: Palette, rows: Vec<Element<'a, M>>) -> Element<'a, M> {
     let mut col = column![].spacing(2).width(Length::Fill);
     for item in rows {
@@ -141,7 +139,6 @@ pub fn soft_panel<'a, M: 'a>(p: Palette, rows: Vec<Element<'a, M>>) -> Element<'
         .into()
 }
 
-/// Full-width borderless row with smooth 60fps hover fade and zero corner-bleed selection.
 pub fn hover_row<'a, M: Clone + 'a>(
     p: Palette,
     hover_t: f32,
@@ -442,7 +439,7 @@ pub fn modal_shell<'a, M: Clone + 'a>(
 
     let sheet_guard: Element<'a, M> = mouse_area(sheet).into();
 
-    let offset_top = (1.0 - alpha.clamp(0.0, 1.0)) * 10.0;
+    let offset_top = (1.0 - alpha.clamp(0.0, 1.0)) * 3.0;
     let backdrop_content = container(
         column![
             Space::new().height(Length::Fixed(offset_top)),

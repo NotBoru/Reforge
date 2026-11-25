@@ -203,13 +203,12 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         .spacing(4),
     );
 
-    // 2. Installed UWP / Appx Bloatware Packages
     if app.bloat_scanning {
         body = body.push(empty_state(
             p,
             motion::spinner(app.motion.spinner_phase, 22.0, p.accent, p.hairline),
             s.scanning,
-            "Inspecting installed Appx / UWP packages",
+            "",
         ));
     } else if app.bloat_packages.is_empty() {
         body = body.push(empty_state(

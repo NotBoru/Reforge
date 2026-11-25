@@ -1,4 +1,6 @@
 fn main() {
+    println!("cargo:rerun-if-changed=assets/reforge.ico");
+    println!("cargo:rerun-if-changed=build.rs");
     #[cfg(windows)]
     {
         let mut res = winresource::WindowsResource::new();

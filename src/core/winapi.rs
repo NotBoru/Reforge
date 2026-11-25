@@ -103,6 +103,39 @@ pub fn is_system_dark_mode() -> bool {
     true
 }
 
+pub fn detect_os_language_is_pt() -> bool {
+    use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
+    let lang_id = unsafe { GetUserDefaultUILanguage() };
+    // Primary language ID 0x16 corresponds to Portuguese (pt-BR / pt-PT).
+    (lang_id & 0x03FF) == 0x0016
+}
+
+pub fn hide_main_window() {
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, ShowWindow, SW_HIDE,
+    };
+
+    unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        unsafe {
+            let pid = lparam as u32;
+            let mut win_pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut win_pid);
+            if win_pid == pid && IsWindowVisible(hwnd) != 0 {
+                ShowWindow(hwnd, SW_HIDE);
+            }
+            1
+        }
+    }
+
+    let pid = unsafe { GetCurrentProcessId() };
+    unsafe {
+        EnumWindows(Some(enum_cb), pid as LPARAM);
+    }
+}
+
 /// Queries Windows Accessibility -> Animation Effects (`SPI_GETCLIENTAREAANIMATION`).
 /// Returns `true` when the user has disabled OS animations (reduced motion).
 pub fn is_reduced_motion_enabled() -> bool {
@@ -175,20 +208,25 @@ pub fn verify_authenticode_signature(path: &std::path::Path) -> bool {
     status == 0
 }
 
-/// Synchronizes the native Windows 10/11 title bar with Reforge's active theme & caption color.
 pub fn apply_dwm_titlebar_theme(dark: bool, rgb: (u8, u8, u8)) {
+    use std::sync::atomic::{AtomicIsize, Ordering};
     use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+    use windows_sys::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject};
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetClassLongPtrW,
+        GCLP_HBRBACKGROUND,
     };
+
+    static BG_BRUSH: AtomicIsize = AtomicIsize::new(0);
 
     struct Payload {
         pid: u32,
         dark: BOOL,
         caption_color: u32,
+        brush: isize,
     }
 
     unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -197,36 +235,45 @@ pub fn apply_dwm_titlebar_theme(dark: bool, rgb: (u8, u8, u8)) {
             let mut win_pid: u32 = 0;
             GetWindowThreadProcessId(hwnd, &mut win_pid);
             if win_pid == data.pid && IsWindowVisible(hwnd) != 0 {
-                // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
                 let _ = DwmSetWindowAttribute(
                     hwnd,
                     20,
                     &data.dark as *const BOOL as *const _,
                     std::mem::size_of::<BOOL>() as u32,
                 );
-                // DWMWA_CAPTION_COLOR = 35 (Win11 22H2+, safely ignored on Win10)
                 let _ = DwmSetWindowAttribute(
                     hwnd,
                     35,
                     &data.caption_color as *const u32 as *const _,
                     std::mem::size_of::<u32>() as u32,
                 );
+                if data.brush != 0 {
+                    SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, data.brush);
+                }
             }
             1
         }
     }
 
-    // COLORREF is 0x00BBGGRR
     let caption_color: u32 = ((rgb.2 as u32) << 16) | ((rgb.1 as u32) << 8) | (rgb.0 as u32);
+    let new_brush = unsafe { CreateSolidBrush(caption_color) as isize };
 
     let payload = Payload {
         pid: unsafe { GetCurrentProcessId() },
         dark: if dark { 1 } else { 0 },
         caption_color,
+        brush: new_brush,
     };
 
     unsafe {
         EnumWindows(Some(enum_cb), &payload as *const Payload as LPARAM);
+    }
+
+    let prev = BG_BRUSH.swap(new_brush, Ordering::Relaxed);
+    if prev != 0 {
+        unsafe {
+            DeleteObject(prev as *mut _);
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::config::{self, PortableConfig, ReforgeProfile};
 use crate::core::app_icons::{self, IconFetchRequest, RgbaIcon};
-use crate::core::catalog::{catalog, preset_app_ids, AppCategory, CatalogApp, PresetKind};
+use crate::core::catalog::{catalog, AppCategory, CatalogApp};
 use crate::core::cleaner::{self, CleanCategoryId, CleanExecResult, CleanScanResult};
 use crate::core::debloater::{self, BloatPackage, BloatSafety, DeepDebloatAction};
 use crate::core::installer::{
@@ -21,7 +21,7 @@ use crate::ui::theme::{self, ThemeMode, FONT_MEDIUM};
 use crate::ui::views;
 use iced::alignment::Vertical;
 use iced::widget::image::Handle as ImageHandle;
-use iced::widget::scrollable::AbsoluteOffset;
+use iced::widget::scrollable::{AbsoluteOffset, Viewport};
 use iced::widget::{button, column, container, operation, row, stack, text, Id, Space};
 use iced::{window, Element, Length, Padding, Subscription, Task, Theme};
 use std::collections::{HashMap, HashSet};
@@ -30,46 +30,59 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-pub const INSTALLER_ROW_HEIGHT: f32 = 54.0;
 pub const INSTALLER_PAGE_SIZE: usize = 50;
 
 pub fn featured_rank(id: &str) -> usize {
     const FEATURED_ORDER: &[&str] = &[
+        "chrome",
+        "brave",
+        "firefox",
+        "discord",
+        "steam",
+        "spotify",
+        "7zip",
+        "winrar",
+        "vlc",
+        "vscode",
+        "vs2022_community",
+        "git",
+        "whatsapp",
+        "telegram",
+        "obs",
+        "nvidia_app",
+        "amd_adrenalin",
+        "vcredist_2015_x64",
+        "vcredist_2015_x86",
+        "directx_runtime",
+        "dotnet_desktop_8",
+        "temurin_21",
+        "everything",
+        "powertoys",
         "claude_desktop",
         "chatgpt",
         "cursor",
         "opencode_desktop",
+        "ivy_iii",
         "gemini_desktop",
         "intellij_idea",
-        "chrome",
-        "brave",
-        "discord",
-        "steam",
         "hydra",
         "lunar_client",
         "cheatbreaker",
         "minecraft_launcher",
-        "vcredist_2015_x64",
-        "directx_runtime",
-        "vscode",
-        "claude_code",
-        "opencode_cli",
-        "ollama",
-        "7zip",
-        "spotify",
-        "vlc",
-        "ddu",
+        "epic",
+        "riot_client",
+        "eac_eos",
+        "ldplayer",
         "logitech_ghub",
         "razer_synapse4",
+        "ddu",
         "process_lasso",
         "msi_afterburner",
-        "obs",
         "blender",
+        "capcut",
+        "retoolkit",
         "obsidian",
         "anki",
-        "git",
-        "powertoys",
-        "everything",
     ];
     FEATURED_ORDER
         .iter()
@@ -94,12 +107,6 @@ pub enum InstallerFilter {
     All,
     NotInstalled,
     Installed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstallerSort {
-    Featured,
-    Name,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,6 +186,7 @@ pub enum Message {
     AnimationTick(Instant),
     HoverEnter(String),
     HoverExit(String),
+    WindowCloseRequested(window::Id),
 
     // Modals
     CloseModal,
@@ -207,11 +215,10 @@ pub enum Message {
     InstallerSearchChanged(String),
     InstallerCategoryChanged(AppCategory),
     InstallerFilterChanged(InstallerFilter),
-    InstallerSortChanged(InstallerSort),
+    InstallerScrolled(Viewport),
     InstallerPageChanged(usize),
     ToggleCatalogApp(&'static str),
     OpenCatalogDetails(&'static CatalogApp),
-    ApplyInstallPreset(PresetKind),
     ClearInstallSelection,
     WingetIndexLoaded(Result<Vec<WingetSearchResult>, String>),
     ToggleWingetApp(String, String),
@@ -303,7 +310,7 @@ pub struct App {
     pub toast: Option<Toast>,
     pub winget_bootstrapping: bool,
 
-    // Real App Icon Handle Caches (O(1) zero-allocation lookups in view!)
+    // Icon handle caches
     installed_icons: HashMap<String, ImageHandle>,
     installed_name_icons: HashMap<String, ImageHandle>,
     installed_catalog_ids: HashSet<&'static str>,
@@ -322,13 +329,15 @@ pub struct App {
     icon_req_tx: mpsc::UnboundedSender<IconFetchRequest>,
     icon_done_rx: Arc<Mutex<mpsc::UnboundedReceiver<(String, Option<RgbaIcon>)>>>,
 
-    // Installer (Crisp 50-Item Paginated Unified Curated + 16,500+ Live WinGet Catalog)
+    // Installer
     pub installer_scroll_id: Id,
     pub installer_search: String,
     pub installer_category: AppCategory,
     pub installer_filter: InstallerFilter,
-    pub installer_sort: InstallerSort,
     pub installer_page: usize,
+    installer_last_scroll_y: f32,
+    installer_full_page_max_y: f32,
+    installer_page_flip_at: Option<Instant>,
     pub curated_matched: Vec<&'static CatalogApp>,
     pub selected_catalog_ids: HashSet<&'static str>,
     pub selected_winget_ids: HashMap<String, String>,
@@ -382,8 +391,8 @@ pub struct App {
     pub tweaks: Vec<SystemTweak>,
     pub tweak_filter: Option<TweakCategory>,
 
-    // CLI visual preview hook
     preview_modal_on_load: bool,
+    has_cli_overrides: bool,
 }
 
 impl App {
@@ -395,6 +404,7 @@ impl App {
         let mut preview_modal_on_load = false;
         let mut check_updates_on_load = false;
         let mut preview_select_installer = false;
+        let mut has_cli_overrides = false;
 
         for arg in std::env::args().skip(1) {
             if let Some(t) = arg.strip_prefix("--tab=") {
@@ -410,6 +420,7 @@ impl App {
                     _ => Tab::Installer,
                 };
             } else if let Some(th) = arg.strip_prefix("--theme=") {
+                has_cli_overrides = true;
                 cfg.theme = match th.to_lowercase().as_str() {
                     "dark" | "vesper" => ThemeMode::Dark,
                     "gemini" | "legacydark" => ThemeMode::GeminiDark,
@@ -417,6 +428,7 @@ impl App {
                     _ => ThemeMode::System,
                 };
             } else if let Some(l) = arg.strip_prefix("--lang=") {
+                has_cli_overrides = true;
                 cfg.lang = match l.to_lowercase().as_str() {
                     "pt" | "pt-br" => Lang::PtBr,
                     _ => Lang::En,
@@ -489,8 +501,10 @@ impl App {
             installer_search: initial_search,
             installer_category: AppCategory::All,
             installer_filter: InstallerFilter::All,
-            installer_sort: InstallerSort::Featured,
             installer_page: initial_page,
+            installer_last_scroll_y: 0.0,
+            installer_full_page_max_y: 0.0,
+            installer_page_flip_at: None,
             curated_matched: Vec::new(),
             selected_catalog_ids: HashSet::new(),
             selected_winget_ids: HashMap::new(),
@@ -538,6 +552,7 @@ impl App {
             tweaks: Vec::new(),
             tweak_filter: None,
             preview_modal_on_load,
+            has_cli_overrides,
         };
 
         let mut tasks = vec![
@@ -608,11 +623,7 @@ impl App {
     }
 
     pub fn title(&self) -> String {
-        if self.sys_info.is_admin {
-            "Reforge — Administrator".into()
-        } else {
-            "Reforge".into()
-        }
+        "Reforge".into()
     }
 
     pub fn theme(&self) -> Theme {
@@ -635,7 +646,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        let mut subs = Vec::new();
+        let mut subs = vec![window::close_requests().map(Message::WindowCloseRequested)];
         if self.installing_active
             || self.updates_running
             || self.uninstalling_active
@@ -647,14 +658,8 @@ impl App {
         if self.motion.is_animating(self.has_live_spinner()) {
             subs.push(window::frames().map(Message::AnimationTick));
         }
-        if subs.is_empty() {
-            Subscription::none()
-        } else {
-            Subscription::batch(subs)
-        }
+        Subscription::batch(subs)
     }
-
-    // ── O(1) ZERO-ALLOCATION REAL APP ICON LOOKUP HELPERS ────────────────────
 
     pub fn installed_icon(&self, app_id: &str) -> Option<&ImageHandle> {
         self.installed_icons.get(app_id)
@@ -689,7 +694,6 @@ impl App {
         self.installed_name_icons.get(&item.name)
     }
 
-    /// O(1) lookup (precomputed on InstalledAppsLoaded instead of scanning every frame!).
     pub fn is_catalog_app_installed(&self, app: &CatalogApp) -> bool {
         self.installed_catalog_ids.contains(app.id)
     }
@@ -751,9 +755,7 @@ impl App {
             })
             .collect();
 
-        if self.installer_sort == InstallerSort::Name {
-            list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        } else if self.installer_category == AppCategory::All && q.is_empty() {
+        if self.installer_category == AppCategory::All && q.is_empty() {
             list.sort_by_key(|a| featured_rank(a.id));
         }
 
@@ -779,20 +781,18 @@ impl App {
                 continue;
             }
             if q.is_empty() {
-                // Prioritize packages that have real icons (5,960-app icon DB or 105+ known major publishers)
-                // when browsing in Featured mode so thousands of scrolled rows display real logos!
-                let rank = if self.installer_sort == InstallerSort::Featured {
-                    if app_icons::lookup_icon_db_url(&self.winget_icon_db, &item.id, &item.name)
-                        .is_some()
-                    {
-                        0
-                    } else if app_icons::publisher_known_domain(&item.publisher).is_some() {
-                        1
-                    } else {
-                        2
-                    }
-                } else {
+                let rank = if app_icons::lookup_icon_db_url(
+                    &self.winget_icon_db,
+                    &item.id,
+                    &item.name,
+                )
+                .is_some()
+                {
                     0
+                } else if app_icons::publisher_known_domain(&item.publisher).is_some() {
+                    1
+                } else {
+                    2
                 };
                 scored.push((rank, idx));
             } else {
@@ -814,18 +814,7 @@ impl App {
             }
         }
 
-        if self.installer_sort == InstallerSort::Name {
-            scored.sort_by(|a, b| {
-                a.0.cmp(&b.0).then_with(|| {
-                    self.winget_full_index[a.1]
-                        .name
-                        .to_lowercase()
-                        .cmp(&self.winget_full_index[b.1].name.to_lowercase())
-                })
-            });
-        } else {
-            scored.sort_by_key(|&(rank, idx)| (rank, idx));
-        }
+        scored.sort_by_key(|&(rank, idx)| (rank, idx));
 
         self.winget_matched_indices = scored.into_iter().map(|(_, idx)| idx).collect();
     }
@@ -861,7 +850,7 @@ impl App {
                 continue;
             }
 
-            // Tier 1: Direct exact app icon URL from 5,960-app UniGetUI DB (+ domain/GitHub fallbacks if stale!)
+            // Direct icon URL from icon DB, falling back to vendor domain and GitHub avatar.
             if let Some(direct_url) =
                 app_icons::lookup_icon_db_url(&self.winget_icon_db, &item.id, &item.name)
             {
@@ -911,7 +900,7 @@ impl App {
                 continue;
             }
 
-            // Tier 2: Shared verified official publisher domain (1 download covers all packages from that vendor!)
+            // Shared known publisher domain icon
             if let Some(dom) = app_icons::publisher_known_domain(&item.publisher) {
                 let key = format!("dom:{dom}");
                 if self.winget_icon_requested.insert(key.clone()) {
@@ -931,7 +920,7 @@ impl App {
                 continue;
             }
 
-            // Tier 3 & 4: Strict heuristic official domain (404 on miss, zero grey globes) + GitHub org/dev avatar
+            // Heuristic domain and GitHub avatar fallback
             let key = format!("wg:{}", item.id);
             if self.winget_icon_requested.insert(key.clone()) {
                 if let Some(cached) = app_icons::load_single_cached_icon(&key) {
@@ -1011,7 +1000,6 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            // ── NAVIGATION & MOTION ──────────────────────────────────────────
             Message::SelectTab(tab) => {
                 if self.active_tab != tab {
                     self.active_tab = tab;
@@ -1089,8 +1077,14 @@ impl App {
                 winapi::open_url(&url);
                 Task::none()
             }
+            Message::WindowCloseRequested(_id) => {
+                if !self.has_cli_overrides {
+                    config::save_config(&self.config);
+                }
+                winapi::hide_main_window();
+                std::process::exit(0);
+            }
 
-            // ── MODALS ───────────────────────────────────────────────────────
             Message::CloseModal => {
                 if !self.uninstalling_active {
                     self.modal = None;
@@ -1139,7 +1133,6 @@ impl App {
                 Task::none()
             }
 
-            // ── REAL APP ICONS ───────────────────────────────────────────────
             Message::InstalledIconsLoaded(map) => {
                 for (k, rgba) in map {
                     self.installed_icons.insert(k, rgba.into_handle());
@@ -1179,7 +1172,6 @@ impl App {
             }
             Message::IconWorkerClosed => Task::none(),
 
-            // ── BACKGROUND STREAMS ───────────────────────────────────────────
             Message::PollStreams => {
                 if let Some(rx_arc) = &self.catalog_icon_rx {
                     if let Ok(mut rx) = rx_arc.lock() {
@@ -1245,7 +1237,6 @@ impl App {
                 Task::none()
             }
 
-            // ── SYSTEM ───────────────────────────────────────────────────────
             Message::RefreshSystemInfo => Task::perform(
                 tokio::task::spawn_blocking(winapi::collect_system_info),
                 |r| Message::SystemInfoLoaded(r.unwrap_or_default()),
@@ -1285,10 +1276,11 @@ impl App {
                 Task::none()
             }
 
-            // ── INSTALLER (CRISP 50-ITEM PAGINATED CURATED + 16,500+ WINGET) ─
             Message::InstallerSearchChanged(q) => {
                 self.installer_search = q;
                 self.installer_page = 1;
+                self.installer_last_scroll_y = 0.0;
+                self.installer_page_flip_at = None;
                 self.refresh_curated_matches();
                 self.refresh_unified_winget_matches();
                 self.queue_visible_winget_icons();
@@ -1300,6 +1292,8 @@ impl App {
             Message::InstallerCategoryChanged(cat) => {
                 self.installer_category = cat;
                 self.installer_page = 1;
+                self.installer_last_scroll_y = 0.0;
+                self.installer_page_flip_at = None;
                 self.motion.clear_hovers();
                 self.refresh_curated_matches();
                 self.queue_visible_winget_icons();
@@ -1311,6 +1305,8 @@ impl App {
             Message::InstallerFilterChanged(f) => {
                 self.installer_filter = f;
                 self.installer_page = 1;
+                self.installer_last_scroll_y = 0.0;
+                self.installer_page_flip_at = None;
                 self.motion.clear_hovers();
                 self.refresh_curated_matches();
                 self.queue_visible_winget_icons();
@@ -1319,16 +1315,73 @@ impl App {
                     AbsoluteOffset { x: 0.0, y: 0.0 },
                 )
             }
-            Message::InstallerSortChanged(s) => {
-                self.installer_sort = s;
-                self.installer_page = 1;
-                self.refresh_curated_matches();
-                self.refresh_unified_winget_matches();
-                self.queue_visible_winget_icons();
-                operation::scroll_to(
-                    self.installer_scroll_id.clone(),
-                    AbsoluteOffset { x: 0.0, y: 0.0 },
-                )
+            Message::InstallerScrolled(vp) => {
+                let y = vp.absolute_offset().y;
+                let prev_y = self.installer_last_scroll_y;
+                self.installer_last_scroll_y = y;
+
+                let scrollable_h = (vp.content_bounds().height - vp.bounds().height).max(0.0);
+                if scrollable_h < 20.0 {
+                    return Task::none();
+                }
+
+                let curated_len = self.curated_matched.len();
+                let wg_len = if self.installer_include_winget() {
+                    self.winget_matched_indices.len()
+                } else {
+                    0
+                };
+                let total = curated_len + wg_len;
+                let total_pages = (total.saturating_sub(1) / INSTALLER_PAGE_SIZE) + 1;
+                if total_pages <= 1 {
+                    return Task::none();
+                }
+
+                if self.installer_page < total_pages && scrollable_h > 400.0 {
+                    self.installer_full_page_max_y = scrollable_h;
+                }
+
+                if self
+                    .installer_page_flip_at
+                    .is_some_and(|t| t.elapsed() < Duration::from_millis(380))
+                {
+                    return Task::none();
+                }
+
+                if y > prev_y && (scrollable_h - y) <= 2.0 && self.installer_page < total_pages {
+                    self.installer_page += 1;
+                    self.installer_page_flip_at = Some(Instant::now());
+                    self.installer_last_scroll_y = 12.0;
+                    self.motion.clear_hovers();
+                    self.queue_visible_winget_icons();
+                    return operation::scroll_to(
+                        self.installer_scroll_id.clone(),
+                        AbsoluteOffset { x: 0.0, y: 12.0 },
+                    );
+                }
+
+                if y < prev_y && y <= 2.0 && self.installer_page > 1 {
+                    self.installer_page -= 1;
+                    self.installer_page_flip_at = Some(Instant::now());
+                    let max_y = if self.installer_full_page_max_y > 100.0 {
+                        self.installer_full_page_max_y
+                    } else {
+                        scrollable_h
+                    };
+                    let target_y = (max_y - 24.0).max(12.0);
+                    self.installer_last_scroll_y = target_y;
+                    self.motion.clear_hovers();
+                    self.queue_visible_winget_icons();
+                    return operation::scroll_to(
+                        self.installer_scroll_id.clone(),
+                        AbsoluteOffset {
+                            x: 0.0,
+                            y: target_y,
+                        },
+                    );
+                }
+
+                Task::none()
             }
             Message::InstallerPageChanged(page) => {
                 let curated_len = self.curated_matched.len();
@@ -1340,6 +1393,8 @@ impl App {
                 let total = curated_len + wg_len;
                 let max_pages = (total.saturating_sub(1) / INSTALLER_PAGE_SIZE) + 1;
                 self.installer_page = page.clamp(1, max_pages.max(1));
+                self.installer_last_scroll_y = 0.0;
+                self.installer_page_flip_at = Some(Instant::now());
                 self.motion.clear_hovers();
                 self.queue_visible_winget_icons();
                 operation::scroll_to(
@@ -1355,12 +1410,6 @@ impl App {
             }
             Message::OpenCatalogDetails(app) => {
                 self.open_modal(ActiveModal::AppDetailsCatalog(app));
-                Task::none()
-            }
-            Message::ApplyInstallPreset(preset) => {
-                for id in preset_app_ids(preset) {
-                    self.selected_catalog_ids.insert(id);
-                }
                 Task::none()
             }
             Message::ClearInstallSelection => {
@@ -1465,7 +1514,6 @@ impl App {
                 Task::none()
             }
 
-            // ── UNINSTALLER ──────────────────────────────────────────────────
             Message::RefreshInstalledApps => {
                 let inc = self.show_system_apps;
                 Task::perform(
@@ -1725,7 +1773,6 @@ impl App {
                 Task::none()
             }
 
-            // ── UPDATER ──────────────────────────────────────────────────────
             Message::CheckUpdates => {
                 self.updates_checking = true;
                 Task::perform(updater::check_for_updates(), Message::UpdatesChecked)
@@ -1772,7 +1819,6 @@ impl App {
                 Task::done(Message::RefreshInstalledApps)
             }
 
-            // ── CLEANER ──────────────────────────────────────────────────────
             Message::ScanJunk => {
                 self.cleaner_scanning = true;
                 let prev: Vec<(CleanCategoryId, bool)> = self
@@ -1825,7 +1871,6 @@ impl App {
                 ])
             }
 
-            // ── DEBLOATER ────────────────────────────────────────────────────
             Message::ScanBloatware => {
                 self.bloat_scanning = true;
                 let include_all = self.show_all_uwp;
@@ -1916,7 +1961,6 @@ impl App {
                 Task::done(Message::ScanBloatware)
             }
 
-            // ── STARTUP ──────────────────────────────────────────────────────
             Message::RefreshStartupItems => Task::perform(
                 tokio::task::spawn_blocking(startup::scan_startup_items),
                 |r| Message::StartupItemsLoaded(r.unwrap_or_default()),
@@ -1969,7 +2013,6 @@ impl App {
                 Task::none()
             }
 
-            // ── TWEAKS ───────────────────────────────────────────────────────
             Message::TweakFilterChanged(filter) => {
                 self.tweak_filter = filter;
                 Task::none()
@@ -2065,7 +2108,6 @@ impl App {
                 Task::none()
             }
 
-            // ── SETTINGS ─────────────────────────────────────────────────────
             Message::SetMaxConcurrency(n) => {
                 self.config.max_concurrent_installs = n.clamp(1, 6);
                 config::save_config(&self.config);

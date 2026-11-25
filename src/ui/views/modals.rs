@@ -1,4 +1,5 @@
 use crate::app::{ActiveModal, App, Message};
+use crate::core::catalog::DirectSource;
 use crate::core::uninstaller::UninstallStage;
 use crate::core::winapi::format_bytes;
 use crate::i18n::{tr, Lang};
@@ -15,6 +16,7 @@ use iced::{Color, Element, Length};
 
 pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a, Message> {
     let s = tr(app.config.lang);
+    let pt = app.config.lang == Lang::PtBr;
     let alpha = app.motion.modal_alpha();
 
     match modal {
@@ -26,10 +28,11 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
             prefer_quiet,
         } => {
             let total_size: u64 = apps.iter().map(|a| a.estimated_size_bytes).sum();
+            let sel_noun = if pt { "selecionados" } else { "selected" };
             let sub = if total_size > 0 {
-                format!("{} apps selected · {}", apps.len(), format_bytes(total_size))
+                format!("{} {sel_noun} · {}", apps.len(), format_bytes(total_size))
             } else {
-                format!("{} apps selected", apps.len())
+                format!("{} {sel_noun}", apps.len())
             };
 
             let app_rows: Vec<Element<'a, Message>> = apps
@@ -342,17 +345,17 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                 p,
                 vec![
                     meta_row(
-                        "Size",
+                        if pt { "Tamanho" } else { "Size" },
                         if inst.estimated_size_bytes > 0 {
                             format_bytes(inst.estimated_size_bytes)
                         } else {
                             "—".into()
                         },
                     ),
-                    meta_row("Installed", inst.install_date.clone()),
-                    meta_row("Location", inst.install_location.clone()),
+                    meta_row(if pt { "Instalado" } else { "Installed" }, inst.install_date.clone()),
+                    meta_row(if pt { "Local" } else { "Location" }, inst.install_location.clone()),
                     meta_row(
-                        "Registry",
+                        if pt { "Registro" } else { "Registry" },
                         format!("{}\\{}", inst.reg_root.as_str(), inst.reg_subkey),
                     ),
                 ],
@@ -441,29 +444,43 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                             .color(p.text_primary)
                             .width(Length::Fill),
                     ]
-                    .spacing(12),
+                    .spacing(12)
+                    .align_y(Vertical::Center),
                 )
                 .padding([8, 10])
                 .into()
+            };
+
+            let delivery_label = match cat_app.direct {
+                Some(DirectSource::OpenUrl { .. }) => {
+                    if pt {
+                        "Página oficial de download"
+                    } else {
+                        "Official download page"
+                    }
+                }
+                Some(_) => {
+                    if pt {
+                        "Download direto + WinGet"
+                    } else {
+                        "Direct download + WinGet"
+                    }
+                }
+                None => "WinGet",
             };
 
             let info = soft_panel(
                 p,
                 vec![
                     meta_row("WinGet ID", cat_app.winget_id.to_string()),
-                    meta_row("Website", cat_app.domain.to_string()),
-                    meta_row(
-                        "Delivery",
-                        if cat_app.direct.is_some() {
-                            "Multi-stream Direct + WinGet fallback".into()
-                        } else {
-                            "WinGet Silent Package".into()
-                        },
-                    ),
+                    meta_row("Site", cat_app.domain.to_string()),
+                    meta_row(if pt { "Origem" } else { "Source" }, delivery_label.into()),
                     meta_row(
                         "Status",
                         if is_inst {
                             s.installed.into()
+                        } else if pt {
+                            "Não instalado".into()
                         } else {
                             "Not installed".into()
                         },
@@ -484,7 +501,7 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
             let footer = row![
                 secondary_button(
                     p,
-                    "Website".into(),
+                    "Site".into(),
                     Some(icons::globe(13.0, p.text_secondary).into()),
                     Some(Message::OpenUrl(format!("https://{}", cat_app.domain))),
                 ),
@@ -494,8 +511,10 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                     p,
                     if selected {
                         s.deselect_all.into()
+                    } else if pt {
+                        "Selecionar".into()
                     } else {
-                        "Select for Install".into()
+                        "Select".into()
                     },
                     None,
                     Some(Message::ToggleCatalogApp(cat_app.id)),
@@ -527,13 +546,15 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                 s.restore_defaults
             };
             let desc = if *apply_recommended {
-                format!(
-                    "This will enable {affected_count} recommended reversible Windows performance, gaming, network, and privacy optimizations."
-                )
+                if pt {
+                    format!("Ativar {affected_count} ajustes recomendados no registro e sistema.")
+                } else {
+                    format!("Enable {affected_count} recommended system and registry settings.")
+                }
+            } else if pt {
+                format!("Restaurar {affected_count} ajustes para os valores padrão do Windows.")
             } else {
-                format!(
-                    "This will revert {affected_count} modified settings back to standard Windows defaults."
-                )
+                format!("Revert {affected_count} modified settings back to Windows defaults.")
             };
 
             let body = column![
@@ -560,14 +581,18 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                     Some(Message::ExecuteConfirmedTweaks),
                 ),
             ]
-            .spacing(8);
+            .spacing(8)
+            .align_y(Vertical::Center);
 
             modal_shell(
                 p,
                 alpha,
                 470.0,
                 s.confirm_tweaks_title,
-                format!("{affected_count} settings"),
+                format!(
+                    "{affected_count} {}",
+                    if pt { "ajustes" } else { "settings" }
+                ),
                 body.into(),
                 footer.into(),
                 Some(Message::CloseModal),
@@ -590,7 +615,8 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                                 .size(11)
                                 .color(p.text_muted),
                         ]
-                        .spacing(10),
+                        .spacing(10)
+                        .align_y(Vertical::Center),
                     )
                     .padding(iced::Padding {
                         top: 7.0,
@@ -623,14 +649,19 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                     Some(Message::ExecuteConfirmedDebloat),
                 ),
             ]
-            .spacing(8);
+            .spacing(8)
+            .align_y(Vertical::Center);
 
             modal_shell(
                 p,
                 alpha,
                 510.0,
                 s.confirm_debloat_title,
-                format!("{} packages", packages.len()),
+                format!(
+                    "{} {}",
+                    packages.len(),
+                    if pt { "pacotes" } else { "packages" }
+                ),
                 body.into(),
                 footer.into(),
                 Some(Message::CloseModal),

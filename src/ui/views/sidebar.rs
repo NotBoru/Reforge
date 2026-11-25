@@ -3,7 +3,7 @@ use crate::core::updater::UpdateItemStatus;
 use crate::i18n::tr;
 use crate::ui::components::h_divider;
 use crate::ui::icons;
-use crate::ui::theme::{self, Palette, ThemeMode, FONT_MEDIUM, FONT_SEMIBOLD};
+use crate::ui::theme::{self, Palette, ThemeMode, FONT_MEDIUM, FONT_REGULAR, FONT_SEMIBOLD};
 use iced::alignment::Vertical;
 use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{Element, Length, Padding};
@@ -13,21 +13,24 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
 
     let brand = container(
         row![
-            container(icons::brand_mark(15.0, p.accent_fg))
-                .padding(5)
-                .style(theme::accent_count_style(p)),
+            icons::brand_mark(15.0, p.accent),
             text("Reforge")
                 .font(FONT_SEMIBOLD)
                 .size(14.5)
                 .color(p.text_primary),
+            Space::new().width(Length::Fill),
+            text("1.0")
+                .font(FONT_REGULAR)
+                .size(11)
+                .color(p.text_muted),
         ]
-        .spacing(9)
+        .spacing(8)
         .align_y(Vertical::Center),
     )
     .padding(Padding {
-        top: 18.0,
+        top: 20.0,
         right: 16.0,
-        bottom: 14.0,
+        bottom: 18.0,
         left: 16.0,
     });
 
@@ -104,12 +107,12 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     let group_header = |title: &'a str| {
         container(
             text(title)
-                .font(FONT_SEMIBOLD)
+                .font(FONT_MEDIUM)
                 .size(10)
                 .color(p.text_muted),
         )
         .padding(Padding {
-            top: 10.0,
+            top: 12.0,
             right: 10.0,
             bottom: 4.0,
             left: 10.0,
@@ -117,7 +120,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     };
 
     let nav = column![
-        group_header(s.nav_apps),
         nav_item(
             Tab::Installer,
             "nav_inst",
@@ -190,7 +192,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     .spacing(2)
     .padding([0, 10]);
 
-    // Refactored Settings nav item + ultra-clean borderless utility strip (zero chunky boxed buttons!)
     let settings_nav = container(nav_item(
         Tab::Settings,
         "nav_set",

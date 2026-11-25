@@ -20,19 +20,14 @@ pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     }
 }
 
-/// Manages OS-aware view transitions, modal fades, and smooth per-item hover interpolation
-/// with zero idle CPU usage.
 #[derive(Debug, Clone)]
 pub struct MotionState {
     pub reduced_motion: bool,
-    tab_started: Option<Instant>,
-    pub tab_progress: f32,
     modal_started: Option<Instant>,
     pub modal_progress: f32,
     spinner_origin: Instant,
     pub spinner_phase: f32,
     last_tick: Instant,
-    /// Maps interactive element key -> (current 0..1 intensity, is_hovered)
     hovers: HashMap<String, (f32, bool)>,
 }
 
@@ -41,8 +36,6 @@ impl MotionState {
         let now = Instant::now();
         Self {
             reduced_motion,
-            tab_started: None,
-            tab_progress: 1.0,
             modal_started: None,
             modal_progress: 1.0,
             spinner_origin: now,
@@ -80,18 +73,11 @@ impl MotionState {
     fn has_active_hovers(&self) -> bool {
         self.hovers
             .values()
-            .any(|&(val, target)| (target && val < 0.999) || (!target && val > 0.001))
+            .any(|&(val, target)| (target && val < 0.995) || (!target && val > 0.005))
     }
 
     pub fn trigger_tab_transition(&mut self) {
         self.hovers.clear();
-        if self.reduced_motion {
-            self.tab_started = None;
-            self.tab_progress = 1.0;
-        } else {
-            self.tab_started = Some(Instant::now());
-            self.tab_progress = 0.0;
-        }
     }
 
     pub fn trigger_modal_enter(&mut self) {
@@ -111,7 +97,7 @@ impl MotionState {
         if self.reduced_motion {
             return false;
         }
-        self.tab_started.is_some() || self.modal_started.is_some() || self.has_active_hovers()
+        self.modal_started.is_some() || self.has_active_hovers()
     }
 
     pub fn tick(&mut self, now: Instant) {
@@ -121,41 +107,38 @@ impl MotionState {
             .clamp(0.001, 0.05);
         self.last_tick = now;
 
-        if let Some(start) = self.tab_started {
-            let t = (now.saturating_duration_since(start).as_secs_f32() / 0.14).min(1.0);
-            self.tab_progress = ease_out_cubic(t);
-            if t >= 1.0 {
-                self.tab_started = None;
-            }
-        }
         if let Some(start) = self.modal_started {
-            let t = (now.saturating_duration_since(start).as_secs_f32() / 0.16).min(1.0);
+            let t = (now.saturating_duration_since(start).as_secs_f32() / 0.11).min(1.0);
             self.modal_progress = ease_out_cubic(t);
             if t >= 1.0 {
                 self.modal_started = None;
             }
         }
 
-        // Smooth hover interpolation: ~105ms fade-in, ~145ms fade-out
+        // Exponential damping gives crisp native desktop response without linear drift.
+        let alpha_in = 1.0 - (-dt / 0.022).exp();
+        let alpha_out = 1.0 - (-dt / 0.042).exp();
         for (val, target) in self.hovers.values_mut() {
             if *target {
-                *val = (*val + dt / 0.105).min(1.0);
+                *val += (1.0 - *val) * alpha_in;
+                if *val > 0.995 {
+                    *val = 1.0;
+                }
             } else {
-                *val = (*val - dt / 0.145).max(0.0);
+                *val *= 1.0 - alpha_out;
+                if *val < 0.005 {
+                    *val = 0.0;
+                }
             }
         }
-        self.hovers.retain(|_, &mut (val, target)| target || val > 0.001);
+        self.hovers.retain(|_, &mut (val, target)| target || val > 0.005);
 
         let secs = now.saturating_duration_since(self.spinner_origin).as_secs_f32();
-        self.spinner_phase = (secs * 1.45) % 1.0;
+        self.spinner_phase = (secs * 1.25) % 1.0;
     }
 
     pub fn tab_offset_y(&self) -> f32 {
-        if self.reduced_motion {
-            0.0
-        } else {
-            (1.0 - self.tab_progress) * 4.0
-        }
+        0.0
     }
 
     pub fn modal_alpha(&self) -> f32 {
@@ -190,11 +173,11 @@ impl<M> canvas::Program<M> for SpinnerProgram {
 
         frame.stroke(
             &Path::circle(center, radius),
-            Stroke::default().with_width(1.8).with_color(self.track),
+            Stroke::default().with_width(1.6).with_color(self.track),
         );
 
         let start = self.phase * 2.0 * PI;
-        let sweep = 1.45 * PI;
+        let sweep = 1.25 * PI;
         let arc = Path::new(|b| {
             let steps = 24;
             for i in 0..=steps {
@@ -210,7 +193,7 @@ impl<M> canvas::Program<M> for SpinnerProgram {
         frame.stroke(
             &arc,
             Stroke::default()
-                .with_width(1.8)
+                .with_width(1.6)
                 .with_color(self.color)
                 .with_line_cap(canvas::LineCap::Round),
         );

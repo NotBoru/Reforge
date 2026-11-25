@@ -20,6 +20,8 @@ use iced::{Color, Element, Length, Padding};
 pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     let s = tr(app.config.lang);
 
+    let pt = app.config.lang == Lang::PtBr;
+
     let header = page_header(
         p,
         s.settings_title,
@@ -32,7 +34,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         ),
     );
 
-    // ── 1. APPEARANCE (Visual Theme Swatches + Language) ─────────────────────
     let theme_cards = row![
         theme_swatch_card(
             app,
@@ -40,7 +41,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             "sw_vesper_dark",
             ThemeMode::Dark,
             s.theme_dark,
-            "Obsidian & Peach",
+            if pt { "Escuro quente" } else { "Warm dark" },
             VESPER_DARK.bg_canvas,
             VESPER_DARK.bg_sidebar,
             VESPER_DARK.accent,
@@ -52,7 +53,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             "sw_gemini_dark",
             ThemeMode::GeminiDark,
             s.theme_gemini,
-            "LegacyDark Slate",
+            if pt { "Grafite e azul" } else { "Slate & blue" },
             GEMINI_LEGACY_DARK.bg_canvas,
             GEMINI_LEGACY_DARK.bg_sidebar,
             GEMINI_LEGACY_DARK.accent,
@@ -64,7 +65,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             "sw_vesper_light",
             ThemeMode::Light,
             s.theme_light,
-            "Warm Paper",
+            if pt { "Claro neutro" } else { "Light paper" },
             VESPER_LIGHT.bg_canvas,
             VESPER_LIGHT.bg_sidebar,
             VESPER_LIGHT.accent,
@@ -76,7 +77,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             "sw_system",
             ThemeMode::System,
             s.theme_system,
-            "Auto Windows",
+            if pt { "Seguir o Windows" } else { "Match Windows" },
             VESPER_DARK.bg_canvas,
             VESPER_LIGHT.bg_canvas,
             p.accent,
@@ -91,10 +92,10 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         p,
         "set_lang",
         s.language_label,
-        if app.config.lang == Lang::PtBr {
-            "Idioma da interface e descrições dos módulos"
+        if pt {
+            "Detectado automaticamente na primeira execução"
         } else {
-            "Interface language and module descriptions"
+            "Detected automatically on first launch"
         },
         segmented_control(
             p,
@@ -120,7 +121,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     ]
     .spacing(12);
 
-    // ── 2. BEHAVIOR (Borderless Smooth Hover Rows) ───────────────────────────
     let concurrency_ctrl = row![
         button(text("−").font(FONT_SEMIBOLD).size(13))
             .padding([4, 10])
@@ -184,7 +184,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     ]
     .spacing(10);
 
-    // ── 3. SYSTEM & WINGET (Minimalist Open Telemetry, Zero Stiff Cards) ─────
     let disk_used = app
         .sys_info
         .disk_total_bytes
@@ -198,26 +197,35 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     let spec_strip = row![
         spec_cell(
             p,
-            "Operating System",
+            if pt { "Sistema" } else { "Operating System" },
             format!("{} ({})", app.sys_info.os_name, app.sys_info.os_build)
         ),
         spec_cell(p, "Host", app.sys_info.hostname.clone()),
-        spec_cell(p, "Processor", format!("{} threads", app.sys_info.cpu_threads)),
-        spec_cell(p, "Memory", format!("{:.1} GB RAM", app.sys_info.ram_total_gb)),
+        spec_cell(
+            p,
+            if pt { "Processador" } else { "Processor" },
+            format!("{} threads", app.sys_info.cpu_threads)
+        ),
+        spec_cell(
+            p,
+            if pt { "Memória" } else { "Memory" },
+            format!("{:.1} GB RAM", app.sys_info.ram_total_gb)
+        ),
     ]
     .spacing(16)
     .width(Length::Fill);
 
     let storage_strip = column![
         row![
-            text("System Drive (C:)")
+            text(if pt { "Disco do sistema (C:)" } else { "System drive (C:)" })
                 .font(FONT_MEDIUM)
                 .size(12.5)
                 .color(p.text_primary),
             Space::new().width(Length::Fill),
             text(format!(
-                "{} free of {}",
+                "{} {} {}",
                 format_bytes(app.sys_info.disk_free_bytes),
+                if pt { "livres de" } else { "free of" },
                 format_bytes(app.sys_info.disk_total_bytes)
             ))
             .font(FONT_REGULAR)
@@ -290,7 +298,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     ]
     .spacing(12);
 
-    // ── 4. PORTABLE PROFILE & ABOUT ──────────────────────────────────────────
     let profile_sec = column![
         section_label(p, s.portable_section),
         container(
@@ -319,7 +326,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                     "GitHub".into(),
                     Some(icons::globe(13.0, p.text_secondary).into()),
                     Some(Message::OpenUrl(
-                        "https://github.com/reforge-win/reforge".into(),
+                        "https://github.com/NotBoru/Reforge".into(),
                     )),
                 ),
             ]
@@ -329,15 +336,15 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         .padding([2, 12]),
         container(
             row![
-                text("Reforge v1.2  ·  Native Rust  ·  Static CRT  ·  MIT License")
+                text("Reforge 1.0  ·  MIT")
                     .font(FONT_REGULAR)
                     .size(11.5)
                     .color(p.text_muted),
                 Space::new().width(Length::Fill),
                 text(if app.motion.reduced_motion {
-                    "Reduced Motion: On"
+                    if pt { "Movimento reduzido" } else { "Reduced motion" }
                 } else {
-                    "Motion: Adaptive"
+                    ""
                 })
                 .font(FONT_REGULAR)
                 .size(11.5)

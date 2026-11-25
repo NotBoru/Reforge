@@ -32,6 +32,7 @@ fn main() -> iced::Result {
             size: Size::new(1180.0, 740.0),
             min_size: Some(Size::new(920.0, 600.0)),
             position: window::Position::Centered,
+            exit_on_close_request: false,
             icon,
             ..Default::default()
         })

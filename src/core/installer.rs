@@ -186,6 +186,7 @@ async fn resolve_direct_url(
                 .ok_or_else(|| format!("No matching asset in {repo}"))?;
             Ok((asset.browser_download_url, kind, silent_args))
         }
+        DirectSource::OpenUrl { .. } => Err("Opens official download page".to_string()),
     }
 }
 
@@ -548,6 +549,19 @@ pub async fn run_install_batch(
             let started = Instant::now();
 
             if let Some(direct_src) = job.direct {
+                if let DirectSource::OpenUrl { url } = direct_src {
+                    crate::core::winapi::open_url(url);
+                    let _ = tx.send(InstallEvent {
+                        app_id: job.id,
+                        app_name: job.name,
+                        stage: InstallStage::Done {
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            method: "Browser",
+                        },
+                    });
+                    return;
+                }
+
                 let _ = tx.send(InstallEvent {
                     app_id: job.id.clone(),
                     app_name: job.name.clone(),
@@ -814,9 +828,7 @@ fn parse_cached_index_tsv(raw: &str) -> Vec<WingetSearchResult> {
     out
 }
 
-/// Ultra-fast live search & browse across the WinGet community repository.
-/// Queries local `winget search` (up-to-date 16,000+ catalog) when querying a term, or
-/// `api.winget.run/v2/packages` as a zero-CLI REST fallback.
+/// Live search across the WinGet community repository, with REST API fallback.
 pub async fn search_winget_catalog(
     query: &str,
     page: usize,

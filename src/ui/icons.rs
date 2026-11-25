@@ -9,11 +9,10 @@ fn make_svg<'a>(raw: &'static [u8], size: f32, color: Color) -> Svg<'a> {
         .style(move |_theme, _status| svg::Style { color: Some(color) })
 }
 
-/// Reforge geometric brand emblem (minimalist faceted forge/prism)
 pub fn brand_mark<'a>(size: f32, color: Color) -> Svg<'a> {
-    const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
-  <path d="M4.5 6.5L12 2.5L19.5 6.5V14.5L12 21.5L4.5 14.5V6.5Z" stroke="#FFFFFF" stroke-width="1.85" stroke-linejoin="round"/>
-  <path d="M8.5 9.5H15.5L13.2 13.5H15.5L10.2 17.5L11.4 13.5H8.5L10.3 9.5Z" fill="#FFFFFF"/>
+    const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M5 19V5h8.5a4.25 4.25 0 0 1 0 8.5H5"/>
+  <path d="M12.5 13.5 19 19"/>
 </svg>"##;
     make_svg(SVG, size, color)
 }

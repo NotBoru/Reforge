@@ -29,6 +29,7 @@ impl AppCategory {
     ];
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresetKind {
     Essentials,
@@ -60,6 +61,9 @@ pub enum DirectSource {
         kind: InstallerKind,
         silent_args: &'static [&'static str],
     },
+    OpenUrl {
+        url: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -74,6 +78,7 @@ pub struct CatalogApp {
     pub winget_id: &'static str,
     pub direct: Option<DirectSource>,
     pub detect_keywords: &'static [&'static str],
+    #[allow(dead_code)]
     pub presets: &'static [PresetKind],
 }
 
@@ -85,14 +90,6 @@ pub fn find_by_winget_id(wid: &str) -> Option<&'static CatalogApp> {
     CATALOG
         .iter()
         .find(|a| a.winget_id.eq_ignore_ascii_case(wid))
-}
-
-pub fn preset_app_ids(preset: PresetKind) -> Vec<&'static str> {
-    CATALOG
-        .iter()
-        .filter(|a| a.presets.contains(&preset))
-        .map(|a| a.id)
-        .collect()
 }
 
 macro_rules! app {
@@ -114,7 +111,7 @@ macro_rules! app {
 }
 
 const CATALOG: &[CatalogApp] = &[
-    // ── AI & LLMS (DESKTOP APPS, CODING AGENTS & CLIS) ───────────────────────
+    // AI & coding tools
     app!(
         "claude_desktop", "Claude", "Anthropic", "claude.ai",
         "Official Anthropic Claude desktop assistant", "Aplicativo desktop oficial do Claude da Anthropic",
@@ -165,9 +162,19 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "opencode_cli", "OpenCode CLI", "Anomaly", "opencode.ai",
-        "Open-source terminal AI coding agent CLI", "Agente de código open-source em terminal (CLI)",
+        "Terminal coding agent", "Agente de código no terminal",
         AppCategory::Ai, "Anomaly.OpenCode", None,
         &["opencode cli"], &[PresetKind::Ai, PresetKind::Developer]
+    ),
+    app!(
+        "ivy_iii", "Ivy (III)", "III", "iii.rocks",
+        "Desktop coding agent built on OpenCode", "Agente de código desktop baseado no OpenCode",
+        AppCategory::Ai, "III.Ivy",
+        Some(DirectSource::StaticUrl {
+            url: "https://iii.rocks/downloads/III-Setup-1.0.17-x64.exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
+        }),
+        &["ivy", "iii"], &[PresetKind::Ai]
     ),
     app!(
         "windsurf", "Windsurf", "Codeium", "windsurf.com",
@@ -213,12 +220,12 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "perplexity_comet", "Perplexity Comet", "Perplexity", "perplexity.ai",
-        "AI-native answer engine & agentic web browser", "Navegador e motor de pesquisa nativo com IA Perplexity",
+        "Answer engine and browser by Perplexity", "Navegador e buscador da Perplexity",
         AppCategory::Ai, "Perplexity.Comet", None,
         &["comet"], &[]
     ),
 
-    // ── DEPENDENCIES & RUNTIMES ──────────────────────────────────────────────
+    // Dependencies & runtimes
     app!(
         "vcredist_2015_x64", "Visual C++ 2015–2022 (x64)", "Microsoft", "microsoft.com",
         "Essential C++ runtime required by most games & apps", "Runtime C++ essencial para jogos e programas 64-bit",
@@ -325,12 +332,18 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "xna_framework", "Microsoft XNA Framework 4.0", "Microsoft", "microsoft.com",
-        "Required by indie games like Terraria & Stardew Valley", "Exigido por jogos como Terraria e indies clássicos",
+        "Runtime required by classic indie games", "Runtime exigido por jogos indie clássicos",
         AppCategory::Dependencies, "Microsoft.XNARedist", None,
         &["xna framework"], &[]
     ),
+    app!(
+        "eac_eos", "Easy Anti-Cheat (EOS)", "Epic Games", "easy.ac",
+        "Epic Online Services and Easy Anti-Cheat runtime", "Runtime do Epic Online Services e Easy Anti-Cheat",
+        AppCategory::Dependencies, "EpicGames.EpicOnlineServices", None,
+        &["epic online services", "easy anti-cheat"], &[PresetKind::Dependencies, PresetKind::Gaming]
+    ),
 
-    // ── FIXES, DRIVERS & HARDWARE TOOLS ──────────────────────────────────────
+    // Fixes, drivers & hardware tools
     app!(
         "ddu", "Display Driver Uninstaller (DDU)", "Wagnardsoft", "wagnardsoft.com",
         "Cleanly wipe NVIDIA, AMD & Intel GPU drivers without traces", "Remove drivers NVIDIA, AMD e Intel sem rastros",
@@ -345,9 +358,33 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "nvidia_app", "NVIDIA App", "NVIDIA", "nvidia.com",
-        "Official NVIDIA Game Ready drivers & ShadowPlay hub", "Drivers Game Ready e ShadowPlay oficial NVIDIA",
+        "NVIDIA drivers and ShadowPlay", "Drivers NVIDIA e ShadowPlay",
         AppCategory::Fixes, "Nvidia.NvidiaApp", None,
         &["nvidia app"], &[]
+    ),
+    app!(
+        "amd_adrenalin", "AMD Software: Adrenalin & Chipset", "AMD", "amd.com",
+        "Official AMD GPU and Ryzen chipset driver installer", "Instalador oficial de drivers AMD Radeon e Chipset Ryzen",
+        AppCategory::Fixes, "AMD.Adrenalin",
+        Some(DirectSource::OpenUrl {
+            url: "https://www.amd.com/en/support/download/drivers.html",
+        }),
+        &["amd software", "amd chipset"], &[]
+    ),
+    app!(
+        "amd_ryzen_master", "AMD Ryzen Master", "AMD", "amd.com",
+        "CPU tuning and monitoring utility for Ryzen", "Monitoramento e ajustes para processadores AMD Ryzen",
+        AppCategory::Fixes, "AMD.RyzenMaster",
+        Some(DirectSource::OpenUrl {
+            url: "https://www.amd.com/en/products/software/ryzen-master.html",
+        }),
+        &["ryzen master"], &[]
+    ),
+    app!(
+        "amd_ocat", "AMD OCAT", "AMD", "amd.com",
+        "Frame-time overlay and GPU performance capture", "Overlay de frametime e captura de desempenho AMD",
+        AppCategory::Fixes, "AMD.OCAT", None,
+        &["ocat"], &[]
     ),
     app!(
         "process_lasso", "Process Lasso", "Bitsum", "bitsum.com",
@@ -500,7 +537,7 @@ const CATALOG: &[CatalogApp] = &[
         &["autohotkey"], &[]
     ),
 
-    // ── GAMES, LAUNCHERS & CLIENTS ───────────────────────────────────────────
+    // Games, launchers & clients
     app!(
         "hydra", "Hydra Launcher", "Hydra", "hydralauncher.gg",
         "Open-source game launcher with library, achievements & cloud saves", "Launcher open-source com biblioteca, conquistas e nuvem",
@@ -534,7 +571,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "badlion", "Badlion Client", "Moonsworth / Badlion", "client.badlion.net",
-        "All-in-one Minecraft PvP client with built-in mods & FPS boost", "Cliente completo de Minecraft com mods embutidos e boost de FPS",
+        "Minecraft PvP client with built-in mods", "Cliente de Minecraft com mods embutidos",
         AppCategory::Gaming, "Badlion.BadlionClient", None,
         &["badlion"], &[]
     ),
@@ -546,7 +583,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "prism_launcher", "Prism Launcher", "Prism Launcher", "prismlauncher.org",
-        "Ultra-fast open-source multi-instance Minecraft launcher", "Launcher open-source ultrarrápido multi-instância para Minecraft",
+        "Open-source multi-instance Minecraft launcher", "Launcher open-source multi-instância para Minecraft",
         AppCategory::Gaming, "PrismLauncher.PrismLauncher",
         Some(DirectSource::GitHubRelease {
             repo: "PrismLauncher/PrismLauncher", asset_contains: &["Windows-MSVC-Setup"],
@@ -588,10 +625,26 @@ const CATALOG: &[CatalogApp] = &[
         &["epic games launcher"], &[]
     ),
     app!(
-        "riot_client", "Riot Client (Valorant / LoL)", "Riot Games", "riotgames.com",
-        "Official launcher for Valorant, League of Legends & TFT", "Launcher oficial de Valorant, League of Legends e TFT",
+        "riot_client", "Riot Client & Vanguard", "Riot Games", "riotgames.com",
+        "Riot Games launcher and Vanguard anti-cheat", "Launcher da Riot Games e anti-cheat Vanguard",
         AppCategory::Gaming, "RiotGames.Valorant.Live", None,
-        &["riot client", "valorant"], &[]
+        &["riot client", "riot vanguard", "valorant"], &[]
+    ),
+    app!(
+        "ldplayer", "LDPlayer 9", "XuanZhi", "ldplayer.net",
+        "Android emulator for PC games", "Emulador Android para jogos no PC",
+        AppCategory::Gaming, "XuanZhi.LDPlayer9",
+        Some(DirectSource::StaticUrl {
+            url: "https://res.ldrescdn.com/download/package/LDPlayer9.0.exe?n=LDPlayer9.0_ens_1001_ld.exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
+        }),
+        &["ldplayer"], &[]
+    ),
+    app!(
+        "bluestacks", "BlueStacks", "BlueStack Systems", "bluestacks.com",
+        "Android app player for Windows", "Emulador de apps e jogos Android para Windows",
+        AppCategory::Gaming, "BlueStack.BlueStacks", None,
+        &["bluestacks"], &[]
     ),
     app!(
         "battlenet", "Battle.net", "Blizzard", "battle.net",
@@ -670,7 +723,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "retroarch", "RetroArch", "Libretro", "retroarch.com",
-        "All-in-one frontend for classic console emulators", "Emulador unificado para consoles clássicos",
+        "Unified frontend for classic console emulators", "Interface unificada para emuladores clássicos",
         AppCategory::Gaming, "Libretro.RetroArch", None,
         &["retroarch"], &[]
     ),
@@ -699,7 +752,7 @@ const CATALOG: &[CatalogApp] = &[
         &["logitech g hub"], &[]
     ),
 
-    // ── BROWSERS ─────────────────────────────────────────────────────────────
+    // Browsers
     app!(
         "chrome", "Google Chrome", "Google", "google.com/chrome",
         "Fast web browser with Google sync", "Navegador rápido com sincronização Google",
@@ -772,7 +825,7 @@ const CATALOG: &[CatalogApp] = &[
         AppCategory::Browsers, "TorProject.TorBrowser", None, &["tor browser"], &[]
     ),
 
-    // ── COMMUNICATION ────────────────────────────────────────────────────────
+    // Communication
     app!(
         "discord", "Discord", "Discord Inc.", "discord.com",
         "Voice, video, and community chat", "Chat de voz, vídeo e comunidades",
@@ -835,10 +888,10 @@ const CATALOG: &[CatalogApp] = &[
         AppCategory::Communication, "OpenWhisperSystems.Signal", None, &["signal"], &[]
     ),
 
-    // ── DEVELOPMENT ──────────────────────────────────────────────────────────
+    // Development
     app!(
         "vscode", "Visual Studio Code", "Microsoft", "code.visualstudio.com",
-        "Extensible source code editor", "Editor de código leve e extensível",
+        "Code editor by Microsoft", "Editor de código da Microsoft",
         AppCategory::Development, "Microsoft.VisualStudioCode",
         Some(DirectSource::StaticUrl {
             url: "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
@@ -848,13 +901,35 @@ const CATALOG: &[CatalogApp] = &[
         &["visual studio code"], &[PresetKind::Developer]
     ),
     app!(
+        "vs2022_community", "Visual Studio 2022", "Microsoft", "visualstudio.microsoft.com",
+        "IDE for C++, C#, .NET and Windows apps (Community)", "IDE da Microsoft para C++, C# e .NET (Community)",
+        AppCategory::Development, "Microsoft.VisualStudio.2022.Community", None,
+        &["visual studio community 2022"], &[PresetKind::Developer]
+    ),
+    app!(
+        "vs2022_buildtools", "Visual Studio Build Tools 2022", "Microsoft", "visualstudio.microsoft.com",
+        "MSVC C/C++ compiler and Windows SDK toolchain", "Compilador MSVC C/C++ e Windows SDK sem a IDE",
+        AppCategory::Development, "Microsoft.VisualStudio.2022.BuildTools", None,
+        &["visual studio build tools"], &[PresetKind::Dependencies, PresetKind::Developer]
+    ),
+    app!(
+        "retoolkit", "REToolkit", "Mente Binária", "mentebinaria.com.br",
+        "Reverse engineering and binary analysis toolkit", "Pacote de ferramentas para engenharia reversa e análise",
+        AppCategory::Development, "MenteBinaria.REToolkit",
+        Some(DirectSource::StaticUrl {
+            url: "https://github.com/mentebinaria/retoolkit/releases/download/2023.10/retoolkit_2023.10_setup.exe",
+            kind: InstallerKind::Exe, silent_args: &["/VERYSILENT", "/NORESTART"],
+        }),
+        &["retoolkit"], &[]
+    ),
+    app!(
         "cursor", "Cursor", "Anysphere", "cursor.com",
-        "AI-native code editor built on VS Code", "Editor de código com IA nativa baseado no VS Code",
+        "Code editor with built-in AI assistance", "Editor de código com assistente de IA integrado",
         AppCategory::Ai, "Anysphere.Cursor", None, &["cursor"], &[PresetKind::Ai, PresetKind::Developer]
     ),
     app!(
         "zed", "Zed", "Zed Industries", "zed.dev",
-        "GPU-accelerated high-speed code editor written in Rust", "Editor de código ultrarrápido feito em Rust",
+        "GPU-accelerated code editor written in Rust", "Editor de código em Rust com aceleração por GPU",
         AppCategory::Development, "ZedIndustries.Zed", None, &["zed"], &[]
     ),
     app!(
@@ -900,7 +975,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "bun", "Bun", "Oven", "bun.sh",
-        "All-in-one ultra-fast JS/TS runtime & package manager", "Runtime e gerenciador JS/TS extremamente rápido",
+        "JavaScript/TypeScript runtime and package manager", "Runtime e gerenciador de pacotes JS/TS",
         AppCategory::Development, "Oven-sh.Bun", None, &["bun"], &[]
     ),
     app!(
@@ -930,7 +1005,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "neovim", "Neovim", "Neovim", "neovim.io",
-        "Hyperextensible Vim-based modal editor", "Editor modal ultrarrápido baseado em Vim",
+        "Extensible Vim-based modal editor", "Editor modal extensível baseado em Vim",
         AppCategory::Development, "Neovim.Neovim",
         Some(DirectSource::GitHubRelease {
             repo: "neovim/neovim", asset_contains: &["win64"],
@@ -961,7 +1036,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "intellij_idea", "IntelliJ IDEA", "JetBrains", "jetbrains.com",
-        "Premier Java, Kotlin & polyglot IDE by JetBrains", "IDE líder da JetBrains para Java, Kotlin e backend",
+        "Java, Kotlin and JVM IDE by JetBrains", "IDE da JetBrains para Java, Kotlin e JVM",
         AppCategory::Development, "JetBrains.IntelliJIDEA", None, &["intellij idea"], &[PresetKind::Developer]
     ),
     app!(
@@ -996,8 +1071,48 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "rustrover", "RustRover", "JetBrains", "jetbrains.com",
-        "Dedicated JetBrains IDE built for Rust development", "IDE dedicada da JetBrains para desenvolvimento em Rust",
+        "JetBrains IDE for Rust", "IDE da JetBrains para Rust",
         AppCategory::Development, "JetBrains.RustRover", None, &["rustrover"], &[]
+    ),
+    app!(
+        "goland", "GoLand", "JetBrains", "jetbrains.com",
+        "JetBrains IDE for Go", "IDE da JetBrains para Go",
+        AppCategory::Development, "JetBrains.GoLand", None, &["goland"], &[]
+    ),
+    app!(
+        "phpstorm", "PhpStorm", "JetBrains", "jetbrains.com",
+        "JetBrains IDE for PHP and web", "IDE da JetBrains para PHP e web",
+        AppCategory::Development, "JetBrains.PhpStorm", None, &["phpstorm"], &[]
+    ),
+    app!(
+        "rubymine", "RubyMine", "JetBrains", "jetbrains.com",
+        "JetBrains IDE for Ruby and Rails", "IDE da JetBrains para Ruby e Rails",
+        AppCategory::Development, "JetBrains.RubyMine", None, &["rubymine"], &[]
+    ),
+    app!(
+        "jb_fleet", "JetBrains Fleet", "JetBrains", "jetbrains.com",
+        "Lightweight multi-language editor by JetBrains", "Editor leve multi-linguagem da JetBrains",
+        AppCategory::Development, "JetBrains.FleetLauncher.Preview", None, &["fleet"], &[]
+    ),
+    app!(
+        "jb_dotpeek", "JetBrains dotPeek", "JetBrains", "jetbrains.com",
+        "Free .NET assembly browser and decompiler", "Navegador e descompilador gratuito de assemblies .NET",
+        AppCategory::Development, "JetBrains.dotPeek", None, &["dotpeek"], &[]
+    ),
+    app!(
+        "jb_resharper", "JetBrains ReSharper", "JetBrains", "jetbrains.com",
+        "Code analysis and refactoring extension for Visual Studio", "Extensão de produtividade e refatoração para Visual Studio",
+        AppCategory::Development, "JetBrains.ReSharper", None, &["resharper"], &[]
+    ),
+    app!(
+        "jb_dottrace", "JetBrains dotTrace", "JetBrains", "jetbrains.com",
+        ".NET performance profiler by JetBrains", "Profiler de desempenho .NET da JetBrains",
+        AppCategory::Development, "JetBrains.dotTrace", None, &["dottrace"], &[]
+    ),
+    app!(
+        "jb_aqua", "JetBrains Aqua", "JetBrains", "jetbrains.com",
+        "IDE for test automation", "IDE da JetBrains para automação de testes",
+        AppCategory::Development, "JetBrains.Aqua.Preview", None, &["jetbrains aqua"], &[]
     ),
     app!(
         "android_studio", "Android Studio", "Google", "developer.android.com",
@@ -1011,7 +1126,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "uv_python", "uv (Python Manager)", "Astral", "astral.sh",
-        "Blazing-fast Rust-powered Python package & venv manager", "Gerenciador ultrarrápido de Python e pacotes feito em Rust",
+        "Python package and environment manager in Rust", "Gerenciador de pacotes e ambientes Python em Rust",
         AppCategory::Development, "astral-sh.uv", None, &["uv"], &[]
     ),
     app!(
@@ -1036,7 +1151,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "wireshark", "Wireshark", "Wireshark Foundation", "wireshark.org",
-        "Industry-standard network packet analyzer", "Analisador profissional de pacotes de rede",
+        "Network protocol and packet analyzer", "Analisador de protocolos e pacotes de rede",
         AppCategory::Development, "WiresharkFoundation.Wireshark", None, &["wireshark"], &[]
     ),
     app!(
@@ -1045,7 +1160,7 @@ const CATALOG: &[CatalogApp] = &[
         AppCategory::Development, "WinSCP.WinSCP", None, &["winscp"], &[]
     ),
 
-    // ── MEDIA & CREATIVE ─────────────────────────────────────────────────────
+    // Media & creative
     app!(
         "vlc", "VLC Media Player", "VideoLAN", "videolan.org",
         "Universal open-source audio & video player", "Reprodutor universal open-source para qualquer mídia",
@@ -1058,7 +1173,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "obs", "OBS Studio", "OBS Project", "obsproject.com",
-        "Studio-grade screen recording and streaming", "Gravação de tela e transmissão ao vivo profissional",
+        "Screen recording and live streaming", "Gravação de tela e transmissão ao vivo",
         AppCategory::Media, "OBSProject.OBSStudio",
         Some(DirectSource::GitHubRelease {
             repo: "obsproject/obs-studio", asset_contains: &["Windows-x64-Installer"],
@@ -1197,14 +1312,14 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "reaper", "REAPER DAW", "Cockos", "reaper.fm",
-        "Ultra-fast lightweight digital audio workstation", "DAW profissional levíssima para produção musical",
+        "Lightweight digital audio workstation", "DAW leve para produção e edição de áudio",
         AppCategory::Media, "Cockos.REAPER", None, &["reaper"], &[]
     ),
 
-    // ── UTILITIES ────────────────────────────────────────────────────────────
+    // Utilities
     app!(
         "7zip", "7-Zip", "Igor Pavlov", "7-zip.org",
-        "Ultra-fast high-compression archive utility", "Compactador ultrarrápido de arquivos",
+        "High-compression file archiver", "Compactador de arquivos de alta compressão",
         AppCategory::Utilities, "7zip.7zip",
         Some(DirectSource::GitHubRelease {
             repo: "ip7z/7zip", asset_contains: &["-x64"],
@@ -1256,7 +1371,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "flow_launcher", "Flow Launcher", "Flow Launcher", "flowlauncher.com",
-        "Fast Spotlight / Raycast-style keyboard launcher for Windows", "Launcher rápido estilo Raycast/Spotlight para Windows",
+        "Keyboard launcher for files, apps and web", "Lançador rápido por teclado para arquivos e apps",
         AppCategory::Utilities, "Flow-Launcher.Flow-Launcher", None, &["flow launcher"], &[]
     ),
     app!(
@@ -1276,7 +1391,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "notepadpp", "Notepad++", "Don Ho", "notepad-plus-plus.org",
-        "Blazing-fast lightweight text & code editor", "Editor de texto e código extremamente leve",
+        "Lightweight text and source code editor", "Editor leve de texto e código-fonte",
         AppCategory::Utilities, "Notepad++.Notepad++",
         Some(DirectSource::GitHubRelease {
             repo: "notepad-plus-plus/notepad-plus-plus", asset_contains: &["Installer.x64"],
@@ -1338,7 +1453,7 @@ const CATALOG: &[CatalogApp] = &[
     ),
     app!(
         "onecommander", "OneCommander", "Milos Paripovic", "onecommander.com",
-        "Dual-pane power file manager with columns & themes", "Gerenciador de arquivos dual-pane com colunas estilo macOS",
+        "Dual-pane file manager with column view", "Gerenciador de arquivos dual-pane com colunas",
         AppCategory::Utilities, "MilosParipovic.OneCommander", None, &["onecommander"], &[]
     ),
     app!(
@@ -1377,7 +1492,7 @@ const CATALOG: &[CatalogApp] = &[
         AppCategory::Utilities, "Ventoy.Ventoy", None, &["ventoy"], &[]
     ),
 
-    // ── PRODUCTIVITY ─────────────────────────────────────────────────────────
+    // Productivity
     app!(
         "obsidian", "Obsidian", "Obsidian", "obsidian.md",
         "Private local-first Markdown knowledge base", "Base de notas em Markdown local-first",
@@ -1513,6 +1628,30 @@ mod tests {
             assert!(!app.detect_keywords.is_empty());
             assert!(ids.insert(app.id), "Duplicate catalog id: {}", app.id);
         }
-        assert!(catalog().len() >= 180);
+        assert!(catalog().len() >= 200);
+        for required in [
+            "chrome",
+            "discord",
+            "steam",
+            "vscode",
+            "vs2022_community",
+            "ivy_iii",
+            "retoolkit",
+            "ldplayer",
+            "eac_eos",
+            "riot_client",
+            "amd_adrenalin",
+            "amd_ryzen_master",
+            "goland",
+            "phpstorm",
+            "rubymine",
+            "jb_fleet",
+            "jb_dotpeek",
+            "jb_resharper",
+            "jb_dottrace",
+            "jb_aqua",
+        ] {
+            assert!(ids.contains(required), "Missing expected catalog id: {required}");
+        }
     }
 }

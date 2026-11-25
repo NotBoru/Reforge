@@ -313,7 +313,7 @@ pub fn load_all_tweaks() -> Vec<SystemTweak> {
         bool,
         bool,
     )] = &[
-        // ── PERFORMANCE & FPS ────────────────────────────────────────────────
+        // Performance
         (
             TweakId::UltimatePowerPlan,
             TweakCategory::Performance,
@@ -404,7 +404,7 @@ pub fn load_all_tweaks() -> Vec<SystemTweak> {
             false,
             true,
         ),
-        // ── GAMING & INPUT LATENCY ───────────────────────────────────────────
+        // Gaming
         (
             TweakId::DisableGameDvr,
             TweakCategory::Gaming,
@@ -455,7 +455,7 @@ pub fn load_all_tweaks() -> Vec<SystemTweak> {
             true,
             false,
         ),
-        // ── NETWORK & PING ───────────────────────────────────────────────────
+        // Network
         (
             TweakId::DisableNetworkThrottling,
             TweakCategory::Network,
@@ -496,7 +496,7 @@ pub fn load_all_tweaks() -> Vec<SystemTweak> {
             false,
             true,
         ),
-        // ── PRIVACY & POST-FORMAT ESSENTIALS ─────────────────────────────────
+        // Privacy & essentials
         (
             TweakId::DisableTelemetryAndDiagTrack,
             TweakCategory::PrivacyAndEssentials,

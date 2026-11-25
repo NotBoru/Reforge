@@ -308,8 +308,6 @@ pub fn swatch_box_style(bg: Color, border_col: Color, radius: f32) -> impl Fn(&T
     }
 }
 
-// ── CONTAINERS ───────────────────────────────────────────────────────────────
-
 pub fn canvas_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(Background::Color(p.bg_canvas)),
@@ -535,8 +533,6 @@ pub fn checkbox_tile_style(p: Palette, checked: bool) -> impl Fn(&Theme) -> cont
     }
 }
 
-// ── BUTTONS ──────────────────────────────────────────────────────────────────
-
 pub fn btn_transparent(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, _| button::Style {
         background: None,
@@ -717,8 +713,6 @@ pub fn btn_segment(p: Palette, active: bool) -> impl Fn(&Theme, button::Status) 
         }
     }
 }
-
-// ── INPUTS, CHECKBOXES, TOGGLERS, PROGRESS, SCROLLBAR ────────────────────────
 
 pub fn input_style(p: Palette) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
     move |_, status| {
