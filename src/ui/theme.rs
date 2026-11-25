@@ -31,6 +31,7 @@ pub const FONT_SEMIBOLD: Font = Font {
     style: FontStyle::Normal,
 };
 
+#[allow(dead_code)]
 pub const FONT_BOLD: Font = Font {
     family: Family::Name("Inter"),
     weight: Weight::Bold,
@@ -63,17 +64,23 @@ impl ThemeMode {
     }
 }
 
+/// Centralized Reforge Design System Palette (Apple macOS / Linear surface-layer ladder).
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub is_dark: bool,
     pub bg_canvas: Color,
     pub bg_sidebar: Color,
-    pub bg_surface: Color,
-    pub bg_surface_hover: Color,
-    pub bg_surface_active: Color,
+    pub bg_group: Color,
+    pub bg_elevated: Color,
+    pub bg_hover: Color,
+    pub bg_active: Color,
+    pub bg_selected: Color,
     pub bg_input: Color,
+    pub bg_segmented: Color,
+    pub scrim: Color,
+    pub hairline: Color,
     pub border: Color,
-    pub border_subtle: Color,
     pub text_primary: Color,
     pub text_secondary: Color,
     pub text_muted: Color,
@@ -98,50 +105,58 @@ const fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
 
 pub const DARK_PALETTE: Palette = Palette {
     is_dark: true,
-    bg_canvas: rgb(11, 12, 15),           // #0B0C0F
-    bg_sidebar: rgb(16, 17, 22),          // #101116
-    bg_surface: rgb(21, 23, 30),          // #15171E
-    bg_surface_hover: rgb(27, 30, 39),    // #1B1E27
-    bg_surface_active: rgb(32, 36, 48),   // #202430
-    bg_input: rgb(14, 15, 20),            // #0E0F14
-    border: rgb(34, 37, 48),              // #222530
-    border_subtle: rgb(26, 28, 36),       // #1A1C24
-    text_primary: rgb(243, 244, 248),     // #F3F4F8
-    text_secondary: rgb(156, 163, 178),   // #9CA3B2
-    text_muted: rgb(100, 107, 122),       // #646B7A
-    accent: rgb(47, 129, 247),            // #2F81F7
-    accent_hover: rgb(68, 147, 248),      // #4493F8
-    accent_soft: rgba(47, 129, 247, 0.14),
-    success: rgb(52, 199, 89),            // #34C759
-    success_soft: rgba(52, 199, 89, 0.13),
-    warning: rgb(245, 165, 36),           // #F5A524
-    warning_soft: rgba(245, 165, 36, 0.13),
-    danger: rgb(240, 68, 56),             // #F04438
-    danger_soft: rgba(240, 68, 56, 0.13),
+    bg_canvas: rgb(14, 15, 19),           // #0E0F13 — rich obsidian neutral
+    bg_sidebar: rgb(19, 20, 25),          // #131419 — macOS sidebar elevation
+    bg_group: rgb(23, 25, 31),            // #17191F — macOS inset grouped container
+    bg_elevated: rgb(29, 31, 39),         // #1D1F27 — modals, active segments
+    bg_hover: rgba(255, 255, 255, 0.042), // whisper-subtle row hover
+    bg_active: rgba(255, 255, 255, 0.075),
+    bg_selected: rgba(10, 132, 255, 0.11),
+    bg_input: rgb(17, 18, 23),            // #111217
+    bg_segmented: rgb(17, 18, 24),
+    scrim: rgba(0, 0, 0, 0.56),
+    hairline: rgba(255, 255, 255, 0.065), // inner row divider
+    border: rgba(255, 255, 255, 0.095),   // crisp outer surface border
+    text_primary: rgb(245, 246, 249),     // #F5F6F9
+    text_secondary: rgb(155, 161, 174),   // #9BA1AE
+    text_muted: rgb(104, 110, 124),       // #686E7C
+    accent: rgb(10, 132, 255),            // #0A84FF — Apple System Blue (Dark)
+    accent_hover: rgb(46, 152, 255),
+    accent_soft: rgba(10, 132, 255, 0.15),
+    success: rgb(48, 209, 88),            // #30D158 — Apple System Green
+    success_soft: rgba(48, 209, 88, 0.13),
+    warning: rgb(255, 159, 10),           // #FF9F0A — Apple System Orange
+    warning_soft: rgba(255, 159, 10, 0.14),
+    danger: rgb(255, 69, 58),             // #FF453A — Apple System Red
+    danger_soft: rgba(255, 69, 58, 0.14),
 };
 
 pub const LIGHT_PALETTE: Palette = Palette {
     is_dark: false,
-    bg_canvas: rgb(246, 247, 249),        // #F6F7F9
-    bg_sidebar: rgb(239, 240, 244),       // #EFF0F4
-    bg_surface: rgb(255, 255, 255),       // #FFFFFF
-    bg_surface_hover: rgb(249, 250, 252), // #F9FAFC
-    bg_surface_active: rgb(237, 242, 252),
-    bg_input: rgb(242, 244, 248),         // #F2F4F8
-    border: rgb(224, 227, 235),           // #E0E3EB
-    border_subtle: rgb(234, 237, 243),    // #EAEDF3
-    text_primary: rgb(17, 19, 24),        // #111318
-    text_secondary: rgb(87, 96, 113),     // #576071
-    text_muted: rgb(136, 145, 163),       // #8891A3
-    accent: rgb(0, 102, 255),             // #0066FF
-    accent_hover: rgb(0, 82, 204),        // #0052CC
-    accent_soft: rgba(0, 102, 255, 0.09),
-    success: rgb(22, 163, 74),            // #16A34A
-    success_soft: rgba(22, 163, 74, 0.10),
-    warning: rgb(217, 119, 6),            // #D97706
+    bg_canvas: rgb(245, 245, 247),        // #F5F5F7 — Apple macOS neutral canvas
+    bg_sidebar: rgb(236, 237, 240),       // #ECEDF0 — cool macOS sidebar
+    bg_group: rgb(255, 255, 255),         // #FFFFFF — crisp inset grouped white
+    bg_elevated: rgb(255, 255, 255),
+    bg_hover: rgba(0, 0, 0, 0.032),
+    bg_active: rgba(0, 0, 0, 0.06),
+    bg_selected: rgba(0, 122, 255, 0.08),
+    bg_input: rgb(235, 236, 240),
+    bg_segmented: rgb(229, 230, 235),
+    scrim: rgba(15, 20, 30, 0.34),
+    hairline: rgba(0, 0, 0, 0.068),
+    border: rgba(0, 0, 0, 0.095),
+    text_primary: rgb(24, 24, 27),        // #18181B
+    text_secondary: rgb(94, 99, 110),     // #5E636E
+    text_muted: rgb(142, 147, 158),       // #8E939E
+    accent: rgb(0, 122, 255),             // #007AFF — Apple System Blue
+    accent_hover: rgb(0, 98, 204),
+    accent_soft: rgba(0, 122, 255, 0.10),
+    success: rgb(40, 180, 68),
+    success_soft: rgba(40, 180, 68, 0.10),
+    warning: rgb(217, 119, 6),
     warning_soft: rgba(217, 119, 6, 0.11),
-    danger: rgb(220, 38, 38),             // #DC2626
-    danger_soft: rgba(220, 38, 38, 0.10),
+    danger: rgb(229, 57, 53),
+    danger_soft: rgba(229, 57, 53, 0.10),
 };
 
 pub fn palette(mode: ThemeMode) -> Palette {
@@ -167,7 +182,7 @@ pub fn iced_theme(mode: ThemeMode) -> Theme {
     )
 }
 
-// ── CONTAINER STYLES ─────────────────────────────────────────────────────────
+// ── SURFACE CONTAINERS ───────────────────────────────────────────────────────
 
 pub fn canvas_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
@@ -181,25 +196,28 @@ pub fn sidebar_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(Background::Color(p.bg_sidebar)),
         text_color: Some(p.text_primary),
-        border: Border {
-            color: p.border,
-            width: 0.0,
-            radius: Radius::from(0.0),
-        },
         ..Default::default()
     }
 }
 
-pub fn divider_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
+pub fn hairline_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(p.hairline)),
+        ..Default::default()
+    }
+}
+
+pub fn border_divider_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(Background::Color(p.border)),
         ..Default::default()
     }
 }
 
-pub fn card_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
+/// macOS System Settings inset grouped surface (holds multiple hairline-separated rows).
+pub fn inset_group_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
-        background: Some(Background::Color(p.bg_surface)),
+        background: Some(Background::Color(p.bg_group)),
         text_color: Some(p.text_primary),
         border: Border {
             color: p.border,
@@ -210,7 +228,7 @@ pub fn card_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
             Shadow::default()
         } else {
             Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.04),
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.035),
                 offset: Vector::new(0.0, 1.0),
                 blur_radius: 3.0,
             }
@@ -224,31 +242,75 @@ pub fn well_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
         background: Some(Background::Color(p.bg_input)),
         text_color: Some(p.text_primary),
         border: Border {
-            color: p.border_subtle,
+            color: p.border,
             width: 1.0,
-            radius: Radius::from(9.0),
+            radius: Radius::from(8.0),
         },
         ..Default::default()
     }
 }
 
-pub fn badge_style(bg: Color, fg: Color, border_color: Color) -> impl Fn(&Theme) -> container::Style {
+pub fn segmented_track_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
-        background: Some(Background::Color(bg)),
-        text_color: Some(fg),
+        background: Some(Background::Color(p.bg_segmented)),
         border: Border {
-            color: border_color,
+            color: p.border,
             width: 1.0,
-            radius: Radius::from(6.0),
+            radius: Radius::from(8.0),
         },
         ..Default::default()
     }
 }
 
-pub fn pill_badge_style(bg: Color, fg: Color) -> impl Fn(&Theme) -> container::Style {
+pub fn modal_scrim_style(p: Palette, alpha: f32) -> impl Fn(&Theme) -> container::Style {
+    move |_| {
+        let mut c = p.scrim;
+        c.a *= alpha.clamp(0.0, 1.0);
+        container::Style {
+            background: Some(Background::Color(c)),
+            ..Default::default()
+        }
+    }
+}
+
+pub fn modal_sheet_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
-        background: Some(Background::Color(bg)),
-        text_color: Some(fg),
+        background: Some(Background::Color(p.bg_elevated)),
+        text_color: Some(p.text_primary),
+        border: Border {
+            color: p.border,
+            width: 1.0,
+            radius: Radius::from(14.0),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, if p.is_dark { 0.55 } else { 0.18 }),
+            offset: Vector::new(0.0, 16.0),
+            blur_radius: 40.0,
+        },
+        ..Default::default()
+    }
+}
+
+pub fn monogram_tile_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(if p.is_dark {
+            rgba(255, 255, 255, 0.06)
+        } else {
+            rgba(0, 0, 0, 0.05)
+        })),
+        text_color: Some(p.text_secondary),
+        border: Border {
+            color: p.hairline,
+            width: 1.0,
+            radius: Radius::from(7.0),
+        },
+        ..Default::default()
+    }
+}
+
+pub fn dot_style(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(color)),
         border: Border {
             color: Color::TRANSPARENT,
             width: 0.0,
@@ -258,32 +320,81 @@ pub fn pill_badge_style(bg: Color, fg: Color) -> impl Fn(&Theme) -> container::S
     }
 }
 
-pub fn toast_style(p: Palette, accent: Color) -> impl Fn(&Theme) -> container::Style {
+pub fn subtle_count_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
-        background: Some(Background::Color(p.bg_surface)),
-        text_color: Some(p.text_primary),
+        background: Some(Background::Color(p.bg_hover)),
+        text_color: Some(p.text_muted),
         border: Border {
-            color: accent,
-            width: 1.0,
-            radius: Radius::from(10.0),
-        },
-        shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, if p.is_dark { 0.35 } else { 0.12 }),
-            offset: Vector::new(0.0, 4.0),
-            blur_radius: 14.0,
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: Radius::from(5.0),
         },
         ..Default::default()
     }
 }
 
-// ── BUTTON STYLES ────────────────────────────────────────────────────────────
+pub fn accent_count_style(p: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(p.accent)),
+        text_color: Some(Color::WHITE),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: Radius::from(5.0),
+        },
+        ..Default::default()
+    }
+}
+
+pub fn toast_style(p: Palette, accent: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(p.bg_elevated)),
+        text_color: Some(p.text_primary),
+        border: Border {
+            color: p.border,
+            width: 1.0,
+            radius: Radius::from(10.0),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(
+                accent.r * 0.0,
+                accent.g * 0.0,
+                accent.b * 0.0,
+                if p.is_dark { 0.45 } else { 0.14 },
+            ),
+            offset: Vector::new(0.0, 8.0),
+            blur_radius: 22.0,
+        },
+        ..Default::default()
+    }
+}
+
+pub fn checkbox_tile_style(p: Palette, checked: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(if checked { p.accent } else { Color::TRANSPARENT })),
+        border: Border {
+            color: if checked { p.accent } else { p.text_muted },
+            width: 1.3,
+            radius: Radius::from(4.5),
+        },
+        ..Default::default()
+    }
+}
+
+// ── BUTTON VARIANTS ──────────────────────────────────────────────────────────
 
 pub fn btn_primary(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let bg = match status {
             button::Status::Hovered => p.accent_hover,
             button::Status::Pressed => p.accent,
-            button::Status::Disabled => rgba(128, 136, 152, 0.25),
+            button::Status::Disabled => {
+                if p.is_dark {
+                    rgba(255, 255, 255, 0.08)
+                } else {
+                    rgba(0, 0, 0, 0.08)
+                }
+            }
             _ => p.accent,
         };
         button::Style {
@@ -296,7 +407,7 @@ pub fn btn_primary(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Sty
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: Radius::from(8.0),
+                radius: Radius::from(7.0),
             },
             ..Default::default()
         }
@@ -306,10 +417,10 @@ pub fn btn_primary(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Sty
 pub fn btn_secondary(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let bg = match status {
-            button::Status::Hovered => p.bg_surface_hover,
-            button::Status::Pressed => p.bg_surface_active,
-            button::Status::Disabled => p.bg_input,
-            _ => p.bg_surface,
+            button::Status::Hovered => p.bg_hover,
+            button::Status::Pressed => p.bg_active,
+            button::Status::Disabled => Color::TRANSPARENT,
+            _ => p.bg_group,
         };
         button::Style {
             background: Some(Background::Color(bg)),
@@ -321,7 +432,7 @@ pub fn btn_secondary(p: Palette) -> impl Fn(&Theme, button::Status) -> button::S
             border: Border {
                 color: p.border,
                 width: 1.0,
-                radius: Radius::from(8.0),
+                radius: Radius::from(7.0),
             },
             ..Default::default()
         }
@@ -331,8 +442,8 @@ pub fn btn_secondary(p: Palette) -> impl Fn(&Theme, button::Status) -> button::S
 pub fn btn_ghost(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let bg = match status {
-            button::Status::Hovered => Some(Background::Color(p.bg_surface_hover)),
-            button::Status::Pressed => Some(Background::Color(p.bg_surface_active)),
+            button::Status::Hovered => Some(Background::Color(p.bg_hover)),
+            button::Status::Pressed => Some(Background::Color(p.bg_active)),
             _ => None,
         };
         button::Style {
@@ -345,6 +456,27 @@ pub fn btn_ghost(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
+                radius: Radius::from(6.0),
+            },
+            ..Default::default()
+        }
+    }
+}
+
+pub fn btn_destructive(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let (bg, fg) = match status {
+            button::Status::Hovered => (p.danger, Color::WHITE),
+            button::Status::Pressed => (p.danger, Color::WHITE),
+            button::Status::Disabled => (p.bg_hover, p.text_muted),
+            _ => (p.danger, Color::WHITE),
+        };
+        button::Style {
+            background: Some(Background::Color(bg)),
+            text_color: fg,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
                 radius: Radius::from(7.0),
             },
             ..Default::default()
@@ -352,13 +484,12 @@ pub fn btn_ghost(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style
     }
 }
 
-pub fn btn_danger(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
+pub fn btn_destructive_subtle(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let (bg, fg, border_c) = match status {
-            button::Status::Hovered => (p.danger, Color::WHITE, p.danger),
-            button::Status::Pressed => (p.danger, Color::WHITE, p.danger),
-            button::Status::Disabled => (p.bg_input, p.text_muted, p.border_subtle),
-            _ => (p.danger_soft, p.danger, rgba(240, 68, 56, 0.30)),
+            button::Status::Hovered | button::Status::Pressed => (p.danger, Color::WHITE, p.danger),
+            button::Status::Disabled => (Color::TRANSPARENT, p.text_muted, p.hairline),
+            _ => (p.danger_soft, p.danger, Color::TRANSPARENT),
         };
         button::Style {
             background: Some(Background::Color(bg)),
@@ -366,28 +497,33 @@ pub fn btn_danger(p: Palette) -> impl Fn(&Theme, button::Status) -> button::Styl
             border: Border {
                 color: border_c,
                 width: 1.0,
-                radius: Radius::from(8.0),
+                radius: Radius::from(7.0),
             },
             ..Default::default()
         }
     }
 }
 
+/// Clean macOS sidebar navigation row (selected uses quiet tinted pill, never heavy borders).
 pub fn btn_nav(p: Palette, active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let bg = if active {
-            Some(Background::Color(p.accent_soft))
+            Some(Background::Color(if p.is_dark {
+                rgba(255, 255, 255, 0.085)
+            } else {
+                rgba(0, 0, 0, 0.065)
+            }))
         } else {
             match status {
-                button::Status::Hovered => Some(Background::Color(p.bg_surface_hover)),
-                button::Status::Pressed => Some(Background::Color(p.bg_surface_active)),
+                button::Status::Hovered => Some(Background::Color(p.bg_hover)),
+                button::Status::Pressed => Some(Background::Color(p.bg_active)),
                 _ => None,
             }
         };
         button::Style {
             background: bg,
             text_color: if active {
-                p.accent
+                p.text_primary
             } else if matches!(status, button::Status::Hovered) {
                 p.text_primary
             } else {
@@ -396,79 +532,72 @@ pub fn btn_nav(p: Palette, active: bool) -> impl Fn(&Theme, button::Status) -> b
             border: Border {
                 color: Color::TRANSPARENT,
                 width: 0.0,
-                radius: Radius::from(8.0),
+                radius: Radius::from(7.0),
             },
             ..Default::default()
         }
     }
 }
 
-pub fn btn_pill(p: Palette, active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+/// macOS Segmented Control item inside a `segmented_track_style` container.
+pub fn btn_segment(p: Palette, active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
-        let (bg, fg, border_c) = if active {
-            (p.accent_soft, p.accent, p.accent)
-        } else {
-            match status {
-                button::Status::Hovered => (p.bg_surface_hover, p.text_primary, p.border),
-                _ => (p.bg_surface, p.text_secondary, p.border),
-            }
-        };
-        button::Style {
-            background: Some(Background::Color(bg)),
-            text_color: fg,
-            border: Border {
-                color: border_c,
-                width: 1.0,
-                radius: Radius::from(999.0),
-            },
-            ..Default::default()
-        }
-    }
-}
-
-pub fn btn_card_selectable(
-    p: Palette,
-    selected: bool,
-) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_, status| {
-        let (bg, border_c) = if selected {
+        let (bg, fg, shadow) = if active {
             (
+                Some(Background::Color(p.bg_elevated)),
+                p.text_primary,
                 if p.is_dark {
-                    rgba(47, 129, 247, 0.11)
+                    Shadow::default()
                 } else {
-                    rgba(0, 102, 255, 0.06)
+                    Shadow {
+                        color: Color::from_rgba(0.0, 0.0, 0.0, 0.08),
+                        offset: Vector::new(0.0, 1.0),
+                        blur_radius: 2.0,
+                    }
                 },
-                p.accent,
             )
         } else {
             match status {
-                button::Status::Hovered => (p.bg_surface_hover, p.text_muted),
-                _ => (p.bg_surface, p.border),
+                button::Status::Hovered => (Some(Background::Color(p.bg_hover)), p.text_primary, Shadow::default()),
+                _ => (None, p.text_secondary, Shadow::default()),
             }
         };
         button::Style {
-            background: Some(Background::Color(bg)),
-            text_color: p.text_primary,
+            background: bg,
+            text_color: fg,
             border: Border {
-                color: border_c,
-                width: 1.0,
-                radius: Radius::from(10.0),
+                color: if active && p.is_dark { p.border } else { Color::TRANSPARENT },
+                width: if active && p.is_dark { 1.0 } else { 0.0 },
+                radius: Radius::from(6.0),
             },
-            shadow: if p.is_dark || selected {
-                Shadow::default()
-            } else {
-                Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.03),
-                    offset: Vector::new(0.0, 1.0),
-                    blur_radius: 2.0,
-                }
-            },
+            shadow,
             ..Default::default()
         }
     }
 }
 
-// ── INPUT, CHECKBOX, TOGGLER, PROGRESS, SCROLLBAR ────────────────────────────
+/// Hairline table/list row inside an inset group — transparent by default, crisp subtle hover/select.
+pub fn btn_list_row(p: Palette, selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let bg = if selected {
+            Some(Background::Color(p.bg_selected))
+        } else {
+            match status {
+                button::Status::Hovered => Some(Background::Color(p.bg_hover)),
+                button::Status::Pressed => Some(Background::Color(p.bg_active)),
+                _ => None,
+            }
+        };
+        button::Style {
+            background: bg,
+            text_color: p.text_primary,
+            border: Border::default(),
+            ..Default::default()
+        }
+    }
+}
+
+// ── INPUTS, CHECKBOXES, TOGGLERS, PROGRESS, SCROLLBAR ────────────────────────
 
 pub fn input_style(p: Palette) -> impl Fn(&Theme, text_input::Status) -> text_input::Style {
     move |_, status| {
@@ -501,12 +630,12 @@ pub fn checkbox_style(p: Palette) -> impl Fn(&Theme, checkbox::Status) -> checkb
                 | checkbox::Status::Disabled { is_checked: true }
         );
         checkbox::Style {
-            background: Background::Color(if is_checked { p.accent } else { p.bg_input }),
+            background: Background::Color(if is_checked { p.accent } else { Color::TRANSPARENT }),
             icon_color: Color::WHITE,
             border: Border {
-                color: if is_checked { p.accent } else { p.border },
-                width: 1.2,
-                radius: Radius::from(5.0),
+                color: if is_checked { p.accent } else { p.text_muted },
+                width: 1.3,
+                radius: Radius::from(4.5),
             },
             text_color: Some(p.text_primary),
         }
@@ -522,7 +651,13 @@ pub fn toggler_style(p: Palette) -> impl Fn(&Theme, toggler::Status) -> toggler:
                 | toggler::Status::Disabled { is_toggled: true }
         );
         toggler::Style {
-            background: Background::Color(if is_toggled { p.accent } else { p.border }),
+            background: Background::Color(if is_toggled {
+                p.accent
+            } else if p.is_dark {
+                rgba(255, 255, 255, 0.16)
+            } else {
+                rgba(0, 0, 0, 0.16)
+            }),
             background_border_width: 0.0,
             background_border_color: Color::TRANSPARENT,
             foreground: Background::Color(Color::WHITE),
@@ -530,14 +665,14 @@ pub fn toggler_style(p: Palette) -> impl Fn(&Theme, toggler::Status) -> toggler:
             foreground_border_color: Color::TRANSPARENT,
             text_color: Some(p.text_primary),
             border_radius: Some(Radius::from(999.0)),
-            padding_ratio: 0.14,
+            padding_ratio: 0.13,
         }
     }
 }
 
 pub fn progress_style(p: Palette, color: Color) -> impl Fn(&Theme) -> progress_bar::Style {
     move |_| progress_bar::Style {
-        background: Background::Color(p.border_subtle),
+        background: Background::Color(p.hairline),
         bar: Background::Color(color),
         border: Border {
             color: Color::TRANSPARENT,
@@ -575,7 +710,7 @@ pub fn scrollable_style(p: Palette) -> impl Fn(&Theme, scrollable::Status) -> sc
             horizontal_rail: rail,
             gap: None,
             auto_scroll: scrollable::AutoScroll {
-                background: Background::Color(p.bg_surface),
+                background: Background::Color(p.bg_elevated),
                 border: Border {
                     color: p.border,
                     width: 1.0,

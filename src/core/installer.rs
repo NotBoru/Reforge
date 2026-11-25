@@ -1,16 +1,34 @@
 use crate::core::catalog::{CatalogApp, DirectSource, InstallerKind};
-use crate::core::winapi::hidden_tokio_cmd;
+use crate::core::winapi::{hidden_tokio_cmd, verify_authenticode_signature};
 use futures_util::StreamExt;
 use reqwest::header::{ACCEPT_RANGES, CONTENT_LENGTH, RANGE, USER_AGENT};
 use reqwest::Client;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{mpsc, Mutex, Semaphore};
+
+static SHARED_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn shared_http_client() -> Result<Client, String> {
+    if let Some(c) = SHARED_CLIENT.get() {
+        return Ok(c.clone());
+    }
+    let client = Client::builder()
+        .user_agent("Reforge/1.0 (+https://github.com/reforge-win/reforge)")
+        .connect_timeout(Duration::from_secs(12))
+        .timeout(Duration::from_secs(600))
+        .pool_max_idle_per_host(16)
+        .tcp_nodelay(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let _ = SHARED_CLIENT.set(client.clone());
+    Ok(client)
+}
 
 #[derive(Debug, Clone)]
 pub enum InstallStage {
@@ -21,13 +39,16 @@ pub enum InstallStage {
         total: u64,
         speed_bps: f64,
     },
+    Verifying,
     Installing {
         method: &'static str,
+        signed: bool,
     },
     Done {
         elapsed_ms: u64,
         method: &'static str,
     },
+    Cancelled,
     Failed(String),
 }
 
@@ -75,18 +96,10 @@ struct GhAsset {
     browser_download_url: String,
 }
 
-fn build_http_client() -> Result<Client, String> {
-    Client::builder()
-        .user_agent("Reforge/1.0 (+https://github.com/reforge-win/reforge)")
-        .connect_timeout(Duration::from_secs(12))
-        .timeout(Duration::from_secs(600))
-        .pool_max_idle_per_host(16)
-        .tcp_nodelay(true)
-        .build()
-        .map_err(|e| e.to_string())
-}
-
-async fn resolve_direct_url(client: &Client, src: DirectSource) -> Result<(String, InstallerKind, &'static [&'static str]), String> {
+async fn resolve_direct_url(
+    client: &Client,
+    src: DirectSource,
+) -> Result<(String, InstallerKind, &'static [&'static str]), String> {
     match src {
         DirectSource::StaticUrl {
             url,
@@ -107,14 +120,14 @@ async fn resolve_direct_url(client: &Client, src: DirectSource) -> Result<(Strin
                 .header(USER_AGENT, "Reforge/1.0")
                 .send()
                 .await
-                .map_err(|e| format!("GitHub API request failed: {e}"))?;
+                .map_err(|e| format!("GitHub API error: {e}"))?;
             if !resp.status().is_success() {
                 return Err(format!("GitHub API HTTP {}", resp.status()));
             }
             let release: GhRelease = resp
                 .json()
                 .await
-                .map_err(|e| format!("GitHub release parse failed: {e}"))?;
+                .map_err(|e| format!("GitHub JSON error: {e}"))?;
             let asset = release
                 .assets
                 .into_iter()
@@ -134,14 +147,42 @@ async fn resolve_direct_url(client: &Client, src: DirectSource) -> Result<(Strin
     }
 }
 
-/// Downloads a file at maximum speed using multi-connection HTTP Range streaming (up to 6 segments)
-/// when supported by the server, falling back transparently to single-stream async I/O.
-async fn fast_download(
+async fn fast_download_with_retry(
     client: &Client,
     url: &str,
     dest: &Path,
     app_id: &str,
     app_name: &str,
+    cancel: &AtomicBool,
+    tx: &mpsc::UnboundedSender<InstallEvent>,
+) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 0..2 {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("CANCELLED".into());
+        }
+        match fast_download_once(client, url, dest, app_id, app_name, cancel, tx).await {
+            Ok(()) => return Ok(()),
+            Err(e) if e == "CANCELLED" => return Err(e),
+            Err(e) => {
+                last_err = e;
+                let _ = fs::remove_file(dest).await;
+                if attempt == 0 {
+                    tokio::time::sleep(Duration::from_millis(700)).await;
+                }
+            }
+        }
+    }
+    Err(last_err)
+}
+
+async fn fast_download_once(
+    client: &Client,
+    url: &str,
+    dest: &Path,
+    app_id: &str,
+    app_name: &str,
+    cancel: &AtomicBool,
     tx: &mpsc::UnboundedSender<InstallEvent>,
 ) -> Result<(), String> {
     let head = client.head(url).send().await;
@@ -165,11 +206,14 @@ async fn fast_download(
         _ => (url.to_string(), 0, false),
     };
 
+    if cancel.load(Ordering::Relaxed) {
+        return Err("CANCELLED".into());
+    }
+
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
 
-    // Use 6 concurrent HTTP range streams for files >= 4 MB that support Range requests
     const MIN_SEGMENTED_BYTES: u64 = 4 * 1024 * 1024;
     const SEGMENTS: u64 = 6;
 
@@ -182,13 +226,12 @@ async fn fast_download(
         let start = Instant::now();
         let chunk_size = total_size / SEGMENTS;
 
-        // Progress reporter task
         let dl_progress = Arc::clone(&downloaded);
         let tx_prog = tx.clone();
         let aid = app_id.to_string();
         let aname = app_name.to_string();
         let prog_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(120));
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
             loop {
                 interval.tick().await;
                 let done = dl_progress.load(Ordering::Relaxed);
@@ -209,6 +252,7 @@ async fn fast_download(
         });
 
         let mut handles = Vec::with_capacity(SEGMENTS as usize);
+        let cancel_shared = Arc::new(AtomicBool::new(false));
         for seg in 0..SEGMENTS {
             let range_start = seg * chunk_size;
             let range_end = if seg == SEGMENTS - 1 {
@@ -220,6 +264,7 @@ async fn fast_download(
             let u = final_url.clone();
             let p = dest.to_path_buf();
             let counter = Arc::clone(&downloaded);
+            let local_cancel = Arc::clone(&cancel_shared);
             handles.push(tokio::spawn(async move {
                 let resp = c
                     .get(&u)
@@ -240,6 +285,9 @@ async fn fast_download(
                     .map_err(|e| e.to_string())?;
                 let mut stream = resp.bytes_stream();
                 while let Some(chunk) = stream.next().await {
+                    if local_cancel.load(Ordering::Relaxed) {
+                        return Err("CANCELLED".into());
+                    }
                     let bytes = chunk.map_err(|e| e.to_string())?;
                     f.write_all(&bytes).await.map_err(|e| e.to_string())?;
                     counter.fetch_add(bytes.len() as u64, Ordering::Relaxed);
@@ -249,8 +297,12 @@ async fn fast_download(
             }));
         }
 
+        // Propagate parent cancellation while awaiting segments
         let mut seg_err = None;
         for h in handles {
+            if cancel.load(Ordering::Relaxed) {
+                cancel_shared.store(true, Ordering::Relaxed);
+            }
             match h.await {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => seg_err = Some(e),
@@ -259,24 +311,17 @@ async fn fast_download(
         }
         prog_handle.abort();
 
+        if cancel.load(Ordering::Relaxed) {
+            let _ = fs::remove_file(dest).await;
+            return Err("CANCELLED".into());
+        }
         if let Some(e) = seg_err {
             let _ = fs::remove_file(dest).await;
             return Err(e);
         }
-        let elapsed = start.elapsed().as_secs_f64().max(0.05);
-        let _ = tx.send(InstallEvent {
-            app_id: app_id.to_string(),
-            app_name: app_name.to_string(),
-            stage: InstallStage::Downloading {
-                downloaded: total_size,
-                total: total_size,
-                speed_bps: total_size as f64 / elapsed,
-            },
-        });
         return Ok(());
     }
 
-    // Fallback: high-throughput single async stream
     let resp = client
         .get(&final_url)
         .send()
@@ -293,10 +338,15 @@ async fn fast_download(
     let mut last_emit = Instant::now();
 
     while let Some(chunk) = stream.next().await {
+        if cancel.load(Ordering::Relaxed) {
+            drop(file);
+            let _ = fs::remove_file(dest).await;
+            return Err("CANCELLED".into());
+        }
         let bytes = chunk.map_err(|e| e.to_string())?;
         file.write_all(&bytes).await.map_err(|e| e.to_string())?;
         done += bytes.len() as u64;
-        if last_emit.elapsed() >= Duration::from_millis(120) {
+        if last_emit.elapsed() >= Duration::from_millis(100) {
             last_emit = Instant::now();
             let elapsed = start.elapsed().as_secs_f64().max(0.05);
             let _ = tx.send(InstallEvent {
@@ -322,7 +372,6 @@ async fn run_local_installer(
 ) -> Result<(), String> {
     let status = match kind {
         InstallerKind::Msi => {
-            // Windows Installer only permits one MSI execution at a time (prevents Error 1618)
             let _guard = msi_lock.lock().await;
             let mut cmd = hidden_tokio_cmd("msiexec");
             cmd.arg("/i").arg(file_path);
@@ -340,7 +389,6 @@ async fn run_local_installer(
         }
     };
 
-    // Exit codes 0 (success) and 3010 (success, reboot recommended) are both clean installs
     let code = status.code().unwrap_or(-1);
     if status.success() || code == 3010 || code == 1641 {
         Ok(())
@@ -366,14 +414,18 @@ async fn run_winget_install(winget_id: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to invoke winget: {e}"))?;
 
     let code = output.status.code().unwrap_or(-1);
-    // 0 = OK, -1978335189 (0x8A15002B) = already installed & up to date
     if output.status.success() || code == -1978335189 {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let msg = if !stderr.trim().is_empty() {
-            stderr.trim().lines().last().unwrap_or("winget error").to_string()
+            stderr
+                .trim()
+                .lines()
+                .last()
+                .unwrap_or("winget error")
+                .to_string()
         } else {
             stdout
                 .trim()
@@ -391,14 +443,16 @@ pub fn temp_download_dir() -> PathBuf {
     std::env::temp_dir().join("Reforge").join("dl")
 }
 
-/// Runs a batch of installation jobs concurrently using Reforge's dual Direct-First + Winget-Fallback pipeline.
+/// Runs a batch of installation jobs concurrently with Authenticode verification,
+/// controlled concurrency, automatic retry, cancellation, and Winget fallback.
 pub async fn run_install_batch(
     jobs: Vec<InstallJob>,
     max_concurrent: usize,
     auto_cleanup: bool,
+    cancel: Arc<AtomicBool>,
     tx: mpsc::UnboundedSender<InstallEvent>,
 ) {
-    let client = match build_http_client() {
+    let client = match shared_http_client() {
         Ok(c) => Arc::new(c),
         Err(e) => {
             for j in jobs {
@@ -412,7 +466,7 @@ pub async fn run_install_batch(
         }
     };
 
-    let sem = Arc::new(Semaphore::new(max_concurrent.clamp(1, 8)));
+    let sem = Arc::new(Semaphore::new(max_concurrent.clamp(1, 6)));
     let msi_lock = Arc::new(Mutex::new(()));
     let dl_root = temp_download_dir();
     let _ = fs::create_dir_all(&dl_root).await;
@@ -431,6 +485,7 @@ pub async fn run_install_batch(
         let http = Arc::clone(&client);
         let msi = Arc::clone(&msi_lock);
         let dir = dl_root.clone();
+        let cancel_flag = Arc::clone(&cancel);
         let tx = tx.clone();
 
         handles.push(tokio::spawn(async move {
@@ -438,9 +493,18 @@ pub async fn run_install_batch(
                 Ok(p) => p,
                 Err(_) => return,
             };
+
+            if cancel_flag.load(Ordering::Relaxed) {
+                let _ = tx.send(InstallEvent {
+                    app_id: job.id,
+                    app_name: job.name,
+                    stage: InstallStage::Cancelled,
+                });
+                return;
+            }
+
             let started = Instant::now();
 
-            // 1. Try ultra-fast Direct Multi-Connection Fast-Path if defined
             if let Some(direct_src) = job.direct {
                 let _ = tx.send(InstallEvent {
                     app_id: job.id.clone(),
@@ -460,39 +524,97 @@ pub async fn run_install_batch(
                         .collect();
                     let dest = dir.join(format!("{safe_id}_setup.{ext}"));
 
-                    if fast_download(&http, &url, &dest, &job.id, &job.name, &tx)
-                        .await
-                        .is_ok()
+                    match fast_download_with_retry(
+                        &http,
+                        &url,
+                        &dest,
+                        &job.id,
+                        &job.name,
+                        &cancel_flag,
+                        &tx,
+                    )
+                    .await
                     {
-                        let _ = tx.send(InstallEvent {
-                            app_id: job.id.clone(),
-                            app_name: job.name.clone(),
-                            stage: InstallStage::Installing { method: "Direct" },
-                        });
-                        let install_res = run_local_installer(&dest, kind, silent_args, &msi).await;
-                        if auto_cleanup {
-                            let _ = fs::remove_file(&dest).await;
-                        }
-                        if install_res.is_ok() {
+                        Ok(()) => {
                             let _ = tx.send(InstallEvent {
                                 app_id: job.id.clone(),
                                 app_name: job.name.clone(),
-                                stage: InstallStage::Done {
-                                    elapsed_ms: started.elapsed().as_millis() as u64,
+                                stage: InstallStage::Verifying,
+                            });
+                            let dest_verify = dest.clone();
+                            let signed = tokio::task::spawn_blocking(move || {
+                                verify_authenticode_signature(&dest_verify)
+                            })
+                            .await
+                            .unwrap_or(false);
+
+                            if cancel_flag.load(Ordering::Relaxed) {
+                                if auto_cleanup {
+                                    let _ = fs::remove_file(&dest).await;
+                                }
+                                let _ = tx.send(InstallEvent {
+                                    app_id: job.id,
+                                    app_name: job.name,
+                                    stage: InstallStage::Cancelled,
+                                });
+                                return;
+                            }
+
+                            let _ = tx.send(InstallEvent {
+                                app_id: job.id.clone(),
+                                app_name: job.name.clone(),
+                                stage: InstallStage::Installing {
                                     method: "Direct",
+                                    signed,
                                 },
+                            });
+
+                            let install_res =
+                                run_local_installer(&dest, kind, silent_args, &msi).await;
+                            if auto_cleanup {
+                                let _ = fs::remove_file(&dest).await;
+                            }
+                            if install_res.is_ok() {
+                                let _ = tx.send(InstallEvent {
+                                    app_id: job.id,
+                                    app_name: job.name,
+                                    stage: InstallStage::Done {
+                                        elapsed_ms: started.elapsed().as_millis() as u64,
+                                        method: "Direct",
+                                    },
+                                });
+                                return;
+                            }
+                        }
+                        Err(e) if e == "CANCELLED" => {
+                            let _ = tx.send(InstallEvent {
+                                app_id: job.id,
+                                app_name: job.name,
+                                stage: InstallStage::Cancelled,
                             });
                             return;
                         }
+                        Err(_) => {} // Fall through cleanly to Winget
                     }
                 }
             }
 
-            // 2. Winget fast fallback (or primary for non-direct apps)
+            if cancel_flag.load(Ordering::Relaxed) {
+                let _ = tx.send(InstallEvent {
+                    app_id: job.id,
+                    app_name: job.name,
+                    stage: InstallStage::Cancelled,
+                });
+                return;
+            }
+
             let _ = tx.send(InstallEvent {
                 app_id: job.id.clone(),
                 app_name: job.name.clone(),
-                stage: InstallStage::Installing { method: "Winget" },
+                stage: InstallStage::Installing {
+                    method: "Winget",
+                    signed: true,
+                },
             });
 
             match run_winget_install(&job.winget_id).await {
@@ -526,7 +648,7 @@ pub async fn run_install_batch(
     }
 }
 
-/// Live search against the entire Winget package catalog (10,000+ Windows apps).
+/// Live search against the entire Winget package catalog (thousands of packages).
 pub async fn search_winget_catalog(query: &str) -> Result<Vec<WingetSearchResult>, String> {
     let q = query.trim();
     if q.len() < 2 {
@@ -540,7 +662,7 @@ pub async fn search_winget_catalog(query: &str) -> Result<Vec<WingetSearchResult
             "winget",
             "--accept-source-agreements",
             "--count",
-            "20",
+            "30",
         ])
         .output()
         .await
@@ -567,7 +689,6 @@ fn parse_winget_search_table(raw: &str) -> Vec<WingetSearchResult> {
     }
 
     let header = lines[sep_idx - 1];
-    // Find column start byte offsets using whitespace gaps in header (works across EN/PT/etc. locales!)
     let cols = detect_header_columns(header);
     if cols.len() < 3 {
         return Vec::new();
@@ -597,7 +718,7 @@ pub fn detect_header_columns(header: &str) -> Vec<usize> {
             i += 1;
         }
         if i < chars.len() {
-            starts.push(i); // character index, not byte index (safe for UTF-8!)
+            starts.push(i);
             while i < chars.len() && !chars[i].1.is_whitespace() {
                 i += 1;
             }
@@ -612,13 +733,15 @@ pub fn slice_col(line: &str, start_char: usize, end_char: Option<usize>) -> Stri
         return String::new();
     }
     let end = end_char.unwrap_or(chars.len()).min(chars.len());
-    chars[start_char..end].iter().collect::<String>().trim().to_string()
+    chars[start_char..end]
+        .iter()
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
-/// Bootstraps or repairs Winget (Microsoft.DesktopAppInstaller) on a freshly formatted PC
-/// directly from official Microsoft GitHub Releases without needing Microsoft Store.
 pub async fn bootstrap_winget() -> Result<String, String> {
-    let client = build_http_client()?;
+    let client = shared_http_client()?;
     let resp = client
         .get("https://api.github.com/repos/microsoft/winget-cli/releases/latest")
         .header(USER_AGENT, "Reforge/1.0")
@@ -664,9 +787,12 @@ pub async fn bootstrap_winget() -> Result<String, String> {
     } else {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         Err(if err.is_empty() {
-            "Add-AppxPackage failed (try installing VCLibs or running as Admin).".into()
+            "Add-AppxPackage failed (try running as Admin).".into()
         } else {
-            err.lines().next().unwrap_or("Winget install failed").to_string()
+            err.lines()
+                .next()
+                .unwrap_or("Winget install failed")
+                .to_string()
         })
     }
 }

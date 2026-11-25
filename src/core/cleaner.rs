@@ -19,6 +19,7 @@ pub enum CleanCategoryId {
     PrefetchAndDns,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CleanCategory {
     pub id: CleanCategoryId,

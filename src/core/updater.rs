@@ -1,4 +1,4 @@
-use crate::core::catalog::catalog;
+use crate::core::catalog::find_by_winget_id;
 use crate::core::installer::{detect_header_columns, slice_col};
 use crate::core::winapi::hidden_tokio_cmd;
 use std::sync::Arc;
@@ -10,7 +10,7 @@ pub struct AppUpdate {
     pub id: String,
     pub current_version: String,
     pub available_version: String,
-    pub source: String,
+    pub catalog_id: Option<&'static str>,
     pub selected: bool,
     pub status: UpdateItemStatus,
 }
@@ -44,15 +44,8 @@ pub async fn check_for_updates() -> Result<Vec<AppUpdate>, String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut updates = parse_winget_upgrade_table(&stdout);
 
-    // Enrich source tag if matched in Reforge curated catalog
-    let cat = catalog();
     for upd in &mut updates {
-        if cat
-            .iter()
-            .any(|c| c.winget_id.eq_ignore_ascii_case(&upd.id))
-        {
-            upd.source = "Reforge + Winget".into();
-        }
+        upd.catalog_id = find_by_winget_id(&upd.id).map(|c| c.id);
     }
 
     Ok(updates)
@@ -101,11 +94,6 @@ fn parse_winget_upgrade_table(raw: &str) -> Vec<AppUpdate> {
         let id = slice_col(line, cols[1], Some(cols[2]));
         let current = slice_col(line, cols[2], Some(cols[3]));
         let available = slice_col(line, cols[3], cols.get(4).copied());
-        let source = cols
-            .get(4)
-            .map(|&s| slice_col(line, s, None))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "winget".into());
 
         if name.is_empty() || id.is_empty() || available.is_empty() || current == available {
             continue;
@@ -119,7 +107,7 @@ fn parse_winget_upgrade_table(raw: &str) -> Vec<AppUpdate> {
             id,
             current_version: current,
             available_version: available,
-            source,
+            catalog_id: None,
             selected: true,
             status: UpdateItemStatus::Available,
         });

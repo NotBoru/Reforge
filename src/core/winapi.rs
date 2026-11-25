@@ -103,6 +103,78 @@ pub fn is_system_dark_mode() -> bool {
     true
 }
 
+/// Queries Windows Accessibility -> Animation Effects (`SPI_GETCLIENTAREAANIMATION`).
+/// Returns `true` when the user has disabled OS animations (reduced motion).
+pub fn is_reduced_motion_enabled() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION,
+    };
+    let mut animations_enabled: i32 = 1;
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            &mut animations_enabled as *mut i32 as *mut _,
+            0,
+        )
+    };
+    ok != 0 && animations_enabled == 0
+}
+
+/// Verifies a Windows executable or MSI Authenticode digital signature using native WinVerifyTrust.
+pub fn verify_authenticode_signature(path: &std::path::Path) -> bool {
+    use windows_sys::core::GUID;
+    use windows_sys::Win32::Security::WinTrust::{
+        WinVerifyTrust, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO, WTD_CHOICE_FILE,
+        WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+    };
+
+    // WINTRUST_ACTION_GENERIC_VERIFY_V2 = {00AAC56B-CD44-11d0-8CC2-00C04FC295EE}
+    let mut action_guid = GUID {
+        data1: 0x00AA_C56B,
+        data2: 0xCD44,
+        data3: 0x11D0,
+        data4: [0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE],
+    };
+
+    let wide = to_wide(&path.to_string_lossy());
+    let mut file_info = WINTRUST_FILE_INFO {
+        cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32,
+        pcwszFilePath: wide.as_ptr(),
+        hFile: std::ptr::null_mut(),
+        pgKnownSubject: std::ptr::null_mut(),
+    };
+
+    let mut data: WINTRUST_DATA = unsafe { std::mem::zeroed() };
+    data.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
+    data.dwUIChoice = WTD_UI_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.Anonymous = WINTRUST_DATA_0 {
+        pFile: &mut file_info,
+    };
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+
+    let status = unsafe {
+        WinVerifyTrust(
+            std::ptr::null_mut(),
+            &mut action_guid,
+            &mut data as *mut _ as *mut _,
+        )
+    };
+
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    unsafe {
+        let _ = WinVerifyTrust(
+            std::ptr::null_mut(),
+            &mut action_guid,
+            &mut data as *mut _ as *mut _,
+        );
+    }
+
+    status == 0
+}
+
 /// Synchronizes the native Windows 10/11 title bar with Reforge's active Dark/Light theme.
 pub fn apply_dwm_titlebar_theme(dark: bool) {
     use windows_sys::core::BOOL;

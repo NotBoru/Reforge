@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use iced::widget::svg::{self, Handle, Svg};
 use iced::{Color, Length};
 
@@ -340,3 +341,28 @@ pub fn sparkles<'a>(size: f32, color: Color) -> Svg<'a> {
 </svg>"##;
     make_svg(SVG, size, color)
 }
+
+pub fn lock<'a>(size: f32, color: Color) -> Svg<'a> {
+    const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+  <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+</svg>"##;
+    make_svg(SVG, size, color)
+}
+
+pub fn info<'a>(size: f32, color: Color) -> Svg<'a> {
+    const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="10"/>
+  <path d="M12 16v-4"/>
+  <path d="M12 8h.01"/>
+</svg>"##;
+    make_svg(SVG, size, color)
+}
+
+pub fn chevron_right<'a>(size: f32, color: Color) -> Svg<'a> {
+    const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <path d="m9 18 6-6-6-6"/>
+</svg>"##;
+    make_svg(SVG, size, color)
+}
+

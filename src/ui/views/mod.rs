@@ -1,6 +1,7 @@
 pub mod cleaner;
 pub mod debloater;
 pub mod installer;
+pub mod modals;
 pub mod settings;
 pub mod sidebar;
 pub mod startup;

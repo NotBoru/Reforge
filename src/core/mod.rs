@@ -1,3 +1,4 @@
+pub mod app_icons;
 pub mod catalog;
 pub mod cleaner;
 pub mod debloater;

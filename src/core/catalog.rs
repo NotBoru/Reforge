@@ -39,13 +39,11 @@ pub enum InstallerKind {
 
 #[derive(Debug, Clone, Copy)]
 pub enum DirectSource {
-    /// Official vendor evergreen download endpoint (redirect or direct binary).
     StaticUrl {
         url: &'static str,
         kind: InstallerKind,
         silent_args: &'static [&'static str],
     },
-    /// Dynamically resolves latest official GitHub release asset matching patterns.
     GitHubRelease {
         repo: &'static str,
         asset_contains: &'static [&'static str],
@@ -61,6 +59,7 @@ pub struct CatalogApp {
     pub id: &'static str,
     pub name: &'static str,
     pub publisher: &'static str,
+    pub domain: &'static str,
     pub desc_en: &'static str,
     pub desc_pt: &'static str,
     pub category: AppCategory,
@@ -71,7 +70,13 @@ pub struct CatalogApp {
 }
 
 pub fn catalog() -> &'static [CatalogApp] {
-    &CATALOG
+    CATALOG
+}
+
+pub fn find_by_winget_id(wid: &str) -> Option<&'static CatalogApp> {
+    CATALOG
+        .iter()
+        .find(|a| a.winget_id.eq_ignore_ascii_case(wid))
 }
 
 pub fn preset_app_ids(preset: PresetKind) -> Vec<&'static str> {
@@ -82,867 +87,576 @@ pub fn preset_app_ids(preset: PresetKind) -> Vec<&'static str> {
         .collect()
 }
 
-static CATALOG: [CatalogApp; 56] = [
+macro_rules! app_entry {
+    ($id:expr, $name:expr, $pub:expr, $dom:expr, $en:expr, $pt:expr, $cat:expr, $wg:expr, $dir:expr, $kw:expr, $pre:expr) => {
+        CatalogApp {
+            id: $id,
+            name: $name,
+            publisher: $pub,
+            domain: $dom,
+            desc_en: $en,
+            desc_pt: $pt,
+            category: $cat,
+            winget_id: $wg,
+            direct: $dir,
+            detect_keywords: $kw,
+            presets: $pre,
+        }
+    };
+}
+
+const CATALOG: &[CatalogApp] = &[
     // ── BROWSERS ─────────────────────────────────────────────────────────────
-    CatalogApp {
-        id: "chrome",
-        name: "Google Chrome",
-        publisher: "Google",
-        desc_en: "Fast, ubiquitous web browser by Google",
-        desc_pt: "Navegador rápido e popular do Google",
-        category: AppCategory::Browsers,
-        winget_id: "Google.Chrome",
-        direct: Some(DirectSource::StaticUrl {
+    app_entry!(
+        "chrome", "Google Chrome", "Google", "google.com/chrome",
+        "Fast web browser with Google sync", "Navegador rápido com sincronização Google",
+        AppCategory::Browsers, "Google.Chrome",
+        Some(DirectSource::StaticUrl {
             url: "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi",
-            kind: InstallerKind::Msi,
-            silent_args: &["/qn", "/norestart"],
+            kind: InstallerKind::Msi, silent_args: &["/qn", "/norestart"],
         }),
-        detect_keywords: &["google chrome"],
-        presets: &[PresetKind::Essentials],
-    },
-    CatalogApp {
-        id: "brave",
-        name: "Brave Browser",
-        publisher: "Brave Software",
-        desc_en: "Privacy-first Chromium browser with built-in ad blocker",
-        desc_pt: "Navegador Chromium focado em privacidade e adblock nativo",
-        category: AppCategory::Browsers,
-        winget_id: "Brave.Brave",
-        direct: Some(DirectSource::StaticUrl {
+        &["google chrome"], &[PresetKind::Essentials]
+    ),
+    app_entry!(
+        "brave", "Brave Browser", "Brave Software", "brave.com",
+        "Privacy-first Chromium browser with built-in ad blocker", "Navegador Chromium privado com bloqueador de anúncios",
+        AppCategory::Browsers, "Brave.Brave",
+        Some(DirectSource::StaticUrl {
             url: "https://laptop-updates.brave.com/latest/winx64",
-            kind: InstallerKind::Exe,
-            silent_args: &["/silent", "/install"],
+            kind: InstallerKind::Exe, silent_args: &["/silent", "/install"],
         }),
-        detect_keywords: &["brave"],
-        presets: &[PresetKind::Developer, PresetKind::Gaming],
-    },
-    CatalogApp {
-        id: "firefox",
-        name: "Mozilla Firefox",
-        publisher: "Mozilla",
-        desc_en: "Open-source browser built for speed and privacy",
-        desc_pt: "Navegador open-source focado em velocidade e privacidade",
-        category: AppCategory::Browsers,
-        winget_id: "Mozilla.Firefox",
-        direct: Some(DirectSource::StaticUrl {
+        &["brave"], &[PresetKind::Developer, PresetKind::Gaming]
+    ),
+    app_entry!(
+        "firefox", "Mozilla Firefox", "Mozilla", "firefox.com",
+        "Open-source browser built for privacy and speed", "Navegador open-source focado em velocidade e privacidade",
+        AppCategory::Browsers, "Mozilla.Firefox",
+        Some(DirectSource::StaticUrl {
             url: "https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["mozilla firefox"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "zen",
-        name: "Zen Browser",
-        publisher: "Zen Team",
-        desc_en: "Minimal, calm Firefox-based browser with vertical tabs",
-        desc_pt: "Navegador minimalista baseado no Firefox com abas verticais",
-        category: AppCategory::Browsers,
-        winget_id: "Zen-Team.Zen-Browser",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "zen-browser/desktop",
-            asset_contains: &["installer"],
-            asset_excludes: &["arm64"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+        &["mozilla firefox"], &[]
+    ),
+    app_entry!(
+        "zen", "Zen Browser", "Zen Team", "zen-browser.app",
+        "Calm, minimal Firefox browser with vertical tabs", "Navegador minimalista baseado no Firefox com abas verticais",
+        AppCategory::Browsers, "Zen-Team.Zen-Browser",
+        Some(DirectSource::GitHubRelease {
+            repo: "zen-browser/desktop", asset_contains: &["installer"],
+            asset_excludes: &["arm64"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["zen browser", "zen twilight"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "vivaldi",
-        name: "Vivaldi",
-        publisher: "Vivaldi Technologies",
-        desc_en: "Power-user browser with deep tab & workspace customization",
-        desc_pt: "Navegador personalizável para produtividade avançada",
-        category: AppCategory::Browsers,
-        winget_id: "Vivaldi.Vivaldi",
-        direct: None,
-        detect_keywords: &["vivaldi"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "librewolf",
-        name: "LibreWolf",
-        publisher: "LibreWolf",
-        desc_en: "Hardened Firefox fork with zero telemetry",
-        desc_pt: "Fork do Firefox focado em privacidade máxima sem telemetria",
-        category: AppCategory::Browsers,
-        winget_id: "LibreWolf.LibreWolf",
-        direct: None,
-        detect_keywords: &["librewolf"],
-        presets: &[],
-    },
+        &["zen browser", "zen twilight"], &[]
+    ),
+    app_entry!(
+        "arc", "Arc Browser", "The Browser Company", "arc.net",
+        "Modern workspace browser with Spaces and Split View", "Navegador moderno com espaços de trabalho e visão dividida",
+        AppCategory::Browsers, "TheBrowserCompany.Arc", None, &["arc"], &[]
+    ),
+    app_entry!(
+        "vivaldi", "Vivaldi", "Vivaldi Technologies", "vivaldi.com",
+        "Power-user browser with deep tab customization", "Navegador avançado altamente personalizável",
+        AppCategory::Browsers, "Vivaldi.Vivaldi", None, &["vivaldi"], &[]
+    ),
+    app_entry!(
+        "librewolf", "LibreWolf", "LibreWolf", "librewolf.net",
+        "Hardened Firefox fork with zero telemetry", "Fork do Firefox focado em privacidade máxima",
+        AppCategory::Browsers, "LibreWolf.LibreWolf", None, &["librewolf"], &[]
+    ),
 
     // ── COMMUNICATION ────────────────────────────────────────────────────────
-    CatalogApp {
-        id: "discord",
-        name: "Discord",
-        publisher: "Discord Inc.",
-        desc_en: "Voice, video, and community chat for gamers & teams",
-        desc_pt: "Chat de voz, vídeo e comunidades para jogos e equipes",
-        category: AppCategory::Communication,
-        winget_id: "Discord.Discord",
-        direct: Some(DirectSource::StaticUrl {
+    app_entry!(
+        "discord", "Discord", "Discord Inc.", "discord.com",
+        "Voice, video, and community chat", "Chat de voz, vídeo e comunidades",
+        AppCategory::Communication, "Discord.Discord",
+        Some(DirectSource::StaticUrl {
             url: "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64",
-            kind: InstallerKind::Exe,
-            silent_args: &["-s"],
+            kind: InstallerKind::Exe, silent_args: &["-s"],
         }),
-        detect_keywords: &["discord"],
-        presets: &[PresetKind::Essentials, PresetKind::Gaming],
-    },
-    CatalogApp {
-        id: "vesktop",
-        name: "Vesktop",
-        publisher: "Vencord",
-        desc_en: "Lightweight Discord client with Vencord & screenshare audio",
-        desc_pt: "Cliente leve para Discord com Vencord embutido",
-        category: AppCategory::Communication,
-        winget_id: "Vencord.Vesktop",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "Vencord/Vesktop",
-            asset_contains: &["Setup"],
-            asset_excludes: &["arm64"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+        &["discord"], &[PresetKind::Essentials, PresetKind::Gaming]
+    ),
+    app_entry!(
+        "vesktop", "Vesktop", "Vencord", "vencord.dev",
+        "Lightweight Discord client with Vencord built in", "Cliente leve para Discord com Vencord integrado",
+        AppCategory::Communication, "Vencord.Vesktop",
+        Some(DirectSource::GitHubRelease {
+            repo: "Vencord/Vesktop", asset_contains: &["Setup"],
+            asset_excludes: &["arm64"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["vesktop"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "telegram",
-        name: "Telegram Desktop",
-        publisher: "Telegram",
-        desc_en: "Fast, cloud-synced desktop messenger",
-        desc_pt: "Mensageiro rápido e sincronizado na nuvem",
-        category: AppCategory::Communication,
-        winget_id: "Telegram.TelegramDesktop",
-        direct: Some(DirectSource::StaticUrl {
+        &["vesktop"], &[]
+    ),
+    app_entry!(
+        "telegram", "Telegram Desktop", "Telegram", "telegram.org",
+        "Fast, cloud-synced desktop messenger", "Mensageiro rápido sincronizado na nuvem",
+        AppCategory::Communication, "Telegram.TelegramDesktop",
+        Some(DirectSource::StaticUrl {
             url: "https://telegram.org/dl/desktop/win64",
-            kind: InstallerKind::Exe,
-            silent_args: &["/VERYSILENT", "/NORESTART"],
+            kind: InstallerKind::Exe, silent_args: &["/VERYSILENT", "/NORESTART"],
         }),
-        detect_keywords: &["telegram desktop"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "whatsapp",
-        name: "WhatsApp",
-        publisher: "Meta",
-        desc_en: "Official WhatsApp client for Windows",
-        desc_pt: "Cliente oficial do WhatsApp para Windows",
-        category: AppCategory::Communication,
-        winget_id: "9NKSQGP7F2NH",
-        direct: None,
-        detect_keywords: &["whatsapp"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "slack",
-        name: "Slack",
-        publisher: "Salesforce",
-        desc_en: "Team messaging and workspace hub",
-        desc_pt: "Comunicação corporativa e canais de equipe",
-        category: AppCategory::Communication,
-        winget_id: "SlackTechnologies.Slack",
-        direct: None,
-        detect_keywords: &["slack"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "zoom",
-        name: "Zoom Workplace",
-        publisher: "Zoom",
-        desc_en: "Video conferencing and screen sharing",
-        desc_pt: "Videoconferências e reuniões online",
-        category: AppCategory::Communication,
-        winget_id: "Zoom.Zoom",
-        direct: Some(DirectSource::StaticUrl {
+        &["telegram desktop"], &[]
+    ),
+    app_entry!(
+        "whatsapp", "WhatsApp", "Meta", "whatsapp.com",
+        "Official WhatsApp desktop client", "Cliente oficial do WhatsApp para Windows",
+        AppCategory::Communication, "9NKSQGP7F2NH", None, &["whatsapp"], &[]
+    ),
+    app_entry!(
+        "slack", "Slack", "Salesforce", "slack.com",
+        "Team messaging and workspace hub", "Comunicação corporativa e canais de equipe",
+        AppCategory::Communication, "SlackTechnologies.Slack", None, &["slack"], &[]
+    ),
+    app_entry!(
+        "zoom", "Zoom Workplace", "Zoom", "zoom.us",
+        "Video conferencing and screen sharing", "Videoconferências e reuniões online",
+        AppCategory::Communication, "Zoom.Zoom",
+        Some(DirectSource::StaticUrl {
             url: "https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64",
-            kind: InstallerKind::Msi,
-            silent_args: &["/qn", "/norestart"],
+            kind: InstallerKind::Msi, silent_args: &["/qn", "/norestart"],
         }),
-        detect_keywords: &["zoom"],
-        presets: &[],
-    },
+        &["zoom"], &[]
+    ),
+    app_entry!(
+        "signal", "Signal", "Signal Foundation", "signal.org",
+        "End-to-end encrypted private messenger", "Mensageiro privado com criptografia ponta a ponta",
+        AppCategory::Communication, "OpenWhisperSystems.Signal", None, &["signal"], &[]
+    ),
 
     // ── DEVELOPMENT ──────────────────────────────────────────────────────────
-    CatalogApp {
-        id: "vscode",
-        name: "Visual Studio Code",
-        publisher: "Microsoft",
-        desc_en: "Lightweight, extensible source code editor",
-        desc_pt: "Editor de código leve, rápido e extensível",
-        category: AppCategory::Development,
-        winget_id: "Microsoft.VisualStudioCode",
-        direct: Some(DirectSource::StaticUrl {
+    app_entry!(
+        "vscode", "Visual Studio Code", "Microsoft", "code.visualstudio.com",
+        "Extensible source code editor", "Editor de código leve e extensível",
+        AppCategory::Development, "Microsoft.VisualStudioCode",
+        Some(DirectSource::StaticUrl {
             url: "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user",
             kind: InstallerKind::Exe,
             silent_args: &["/VERYSILENT", "/NORESTART", "/MERGETASKS=!runcode,addcontextmenufiles,addcontextmenufolders,addtopath"],
         }),
-        detect_keywords: &["visual studio code"],
-        presets: &[PresetKind::Developer],
-    },
-    CatalogApp {
-        id: "git",
-        name: "Git for Windows",
-        publisher: "Git",
-        desc_en: "Distributed version control system + Git Bash",
-        desc_pt: "Sistema de controle de versão distribuído + Git Bash",
-        category: AppCategory::Development,
-        winget_id: "Git.Git",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "git-for-windows/git",
-            asset_contains: &["64-bit"],
-            asset_excludes: &["Portable", "MinGit", "tar", "arm64"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/VERYSILENT", "/NORESTART"],
+        &["visual studio code"], &[PresetKind::Developer]
+    ),
+    app_entry!(
+        "cursor", "Cursor", "Anysphere", "cursor.com",
+        "AI-native code editor built on VS Code", "Editor de código com IA nativa baseado no VS Code",
+        AppCategory::Development, "Anysphere.Cursor", None, &["cursor"], &[]
+    ),
+    app_entry!(
+        "git", "Git for Windows", "Git", "git-scm.com",
+        "Distributed version control + Git Bash", "Controle de versão distribuído + Git Bash",
+        AppCategory::Development, "Git.Git",
+        Some(DirectSource::GitHubRelease {
+            repo: "git-for-windows/git", asset_contains: &["64-bit"],
+            asset_excludes: &["Portable", "MinGit", "tar", "arm64"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/VERYSILENT", "/NORESTART"],
         }),
-        detect_keywords: &["git"],
-        presets: &[PresetKind::Developer],
-    },
-    CatalogApp {
-        id: "windows_terminal",
-        name: "Windows Terminal",
-        publisher: "Microsoft",
-        desc_en: "Modern GPU-accelerated tabbed terminal for Windows",
-        desc_pt: "Terminal moderno com abas e aceleração por GPU",
-        category: AppCategory::Development,
-        winget_id: "Microsoft.WindowsTerminal",
-        direct: None,
-        detect_keywords: &["windows terminal"],
-        presets: &[PresetKind::Developer],
-    },
-    CatalogApp {
-        id: "nodejs",
-        name: "Node.js LTS",
-        publisher: "OpenJS Foundation",
-        desc_en: "JavaScript runtime built on Chrome's V8 engine",
-        desc_pt: "Runtime JavaScript LTS com npm incluso",
-        category: AppCategory::Development,
-        winget_id: "OpenJS.NodeJS.LTS",
-        direct: None,
-        detect_keywords: &["node.js"],
-        presets: &[PresetKind::Developer],
-    },
-    CatalogApp {
-        id: "python3",
-        name: "Python 3.12",
-        publisher: "Python Software Foundation",
-        desc_en: "General-purpose scripting & data programming language",
-        desc_pt: "Linguagem Python 3 com pip configurado",
-        category: AppCategory::Development,
-        winget_id: "Python.Python.3.12",
-        direct: None,
-        detect_keywords: &["python 3."],
-        presets: &[PresetKind::Developer],
-    },
-    CatalogApp {
-        id: "rustup",
-        name: "Rustup (Rust)",
-        publisher: "Rust Project",
-        desc_en: "Official Rust toolchain installer and manager",
-        desc_pt: "Instalador oficial da toolchain Rust",
-        category: AppCategory::Development,
-        winget_id: "Rustlang.Rustup",
-        direct: Some(DirectSource::StaticUrl {
+        &["git"], &[PresetKind::Developer]
+    ),
+    app_entry!(
+        "windows_terminal", "Windows Terminal", "Microsoft", "microsoft.com",
+        "GPU-accelerated modern tabbed terminal", "Terminal moderno com abas e aceleração GPU",
+        AppCategory::Development, "Microsoft.WindowsTerminal", None, &["windows terminal"], &[PresetKind::Developer]
+    ),
+    app_entry!(
+        "powershell7", "PowerShell 7", "Microsoft", "microsoft.com",
+        "Modern cross-platform PowerShell shell", "Shell PowerShell 7 moderno e rápido",
+        AppCategory::Development, "Microsoft.PowerShell", None, &["powershell 7"], &[]
+    ),
+    app_entry!(
+        "nodejs", "Node.js LTS", "OpenJS Foundation", "nodejs.org",
+        "JavaScript runtime built on Chrome V8", "Runtime JavaScript LTS com npm incluso",
+        AppCategory::Development, "OpenJS.NodeJS.LTS", None, &["node.js"], &[PresetKind::Developer]
+    ),
+    app_entry!(
+        "python3", "Python 3.12", "Python Software Foundation", "python.org",
+        "Scripting, backend and data language", "Linguagem Python 3 com pip incluso",
+        AppCategory::Development, "Python.Python.3.12", None, &["python 3."], &[PresetKind::Developer]
+    ),
+    app_entry!(
+        "golang", "Go", "Google", "go.dev",
+        "Fast, statically typed systems language", "Linguagem compilada rápida para backend e CLI",
+        AppCategory::Development, "GoLang.Go", None, &["go programming language"], &[]
+    ),
+    app_entry!(
+        "rustup", "Rustup (Rust)", "Rust Project", "rust-lang.org",
+        "Official Rust compiler & Cargo installer", "Instalador oficial da toolchain Rust e Cargo",
+        AppCategory::Development, "Rustlang.Rustup",
+        Some(DirectSource::StaticUrl {
             url: "https://win.rustup.rs/x86_64",
-            kind: InstallerKind::Exe,
-            silent_args: &["-y"],
+            kind: InstallerKind::Exe, silent_args: &["-y"],
         }),
-        detect_keywords: &["rustup"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "docker",
-        name: "Docker Desktop",
-        publisher: "Docker Inc.",
-        desc_en: "Container runtime and Compose environment for Windows",
-        desc_pt: "Ambiente completo de containers e Docker Compose",
-        category: AppCategory::Development,
-        winget_id: "Docker.DockerDesktop",
-        direct: None,
-        detect_keywords: &["docker desktop"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "github_desktop",
-        name: "GitHub Desktop",
-        publisher: "GitHub",
-        desc_en: "Clean visual Git client for repositories and PRs",
-        desc_pt: "Cliente visual intuitivo para repositórios GitHub",
-        category: AppCategory::Development,
-        winget_id: "GitHub.GitHubDesktop",
-        direct: Some(DirectSource::StaticUrl {
+        &["rustup"], &[]
+    ),
+    app_entry!(
+        "docker", "Docker Desktop", "Docker Inc.", "docker.com",
+        "Containers, Compose and local Kubernetes", "Ambiente de containers e Docker Compose",
+        AppCategory::Development, "Docker.DockerDesktop", None, &["docker desktop"], &[]
+    ),
+    app_entry!(
+        "github_desktop", "GitHub Desktop", "GitHub", "github.com",
+        "Visual Git client for repositories and PRs", "Cliente visual intuitivo para repositórios GitHub",
+        AppCategory::Development, "GitHub.GitHubDesktop",
+        Some(DirectSource::StaticUrl {
             url: "https://central.github.com/deployments/desktop/desktop/latest/win32",
-            kind: InstallerKind::Exe,
-            silent_args: &["-s"],
+            kind: InstallerKind::Exe, silent_args: &["-s"],
         }),
-        detect_keywords: &["github desktop"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "neovim",
-        name: "Neovim",
-        publisher: "Neovim",
-        desc_en: "Hyperextensible Vim-based modal text editor",
-        desc_pt: "Editor modal ultrarrápido baseado em Vim",
-        category: AppCategory::Development,
-        winget_id: "Neovim.Neovim",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "neovim/neovim",
-            asset_contains: &["win64"],
-            asset_excludes: &[],
-            asset_ends_with: ".msi",
-            kind: InstallerKind::Msi,
-            silent_args: &["/qn", "/norestart"],
+        &["github desktop"], &[]
+    ),
+    app_entry!(
+        "neovim", "Neovim", "Neovim", "neovim.io",
+        "Hyperextensible Vim-based modal editor", "Editor modal ultrarrápido baseado em Vim",
+        AppCategory::Development, "Neovim.Neovim",
+        Some(DirectSource::GitHubRelease {
+            repo: "neovim/neovim", asset_contains: &["win64"],
+            asset_excludes: &[], asset_ends_with: ".msi",
+            kind: InstallerKind::Msi, silent_args: &["/qn", "/norestart"],
         }),
-        detect_keywords: &["neovim"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "postman",
-        name: "Postman",
-        publisher: "Postman Inc.",
-        desc_en: "API platform for building, testing and debugging requests",
-        desc_pt: "Plataforma para testar e depurar APIs REST/GraphQL",
-        category: AppCategory::Development,
-        winget_id: "Postman.Postman",
-        direct: None,
-        detect_keywords: &["postman"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "dbeaver",
-        name: "DBeaver Community",
-        publisher: "DBeaver",
-        desc_en: "Universal SQL database client (Postgres, MySQL, SQLite)",
-        desc_pt: "Cliente universal para bancos SQL e NoSQL",
-        category: AppCategory::Development,
-        winget_id: "dbeaver.dbeaver",
-        direct: None,
-        detect_keywords: &["dbeaver"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "jetbrains_toolbox",
-        name: "JetBrains Toolbox",
-        publisher: "JetBrains",
-        desc_en: "Manage IntelliJ, Rider, RustRover, WebStorm & PyCharm",
-        desc_pt: "Gerenciador de IDEs JetBrains com updates automáticos",
-        category: AppCategory::Development,
-        winget_id: "JetBrains.Toolbox",
-        direct: None,
-        detect_keywords: &["jetbrains toolbox"],
-        presets: &[],
-    },
+        &["neovim"], &[]
+    ),
+    app_entry!(
+        "postman", "Postman", "Postman Inc.", "postman.com",
+        "REST & GraphQL API client and test suite", "Plataforma para testar e depurar APIs",
+        AppCategory::Development, "Postman.Postman", None, &["postman"], &[]
+    ),
+    app_entry!(
+        "insomnia", "Insomnia", "Kong", "insomnia.rest",
+        "Lightweight open-source REST & GraphQL client", "Cliente leve e limpo para APIs REST e GraphQL",
+        AppCategory::Development, "Insomnia.Insomnia", None, &["insomnia"], &[]
+    ),
+    app_entry!(
+        "dbeaver", "DBeaver Community", "DBeaver", "dbeaver.io",
+        "Universal SQL database GUI client", "Cliente universal para bancos SQL e NoSQL",
+        AppCategory::Development, "dbeaver.dbeaver", None, &["dbeaver"], &[]
+    ),
+    app_entry!(
+        "jetbrains_toolbox", "JetBrains Toolbox", "JetBrains", "jetbrains.com",
+        "Manage IntelliJ, RustRover, Rider & WebStorm", "Gerenciador oficial de IDEs JetBrains",
+        AppCategory::Development, "JetBrains.Toolbox", None, &["jetbrains toolbox"], &[]
+    ),
 
     // ── GAMING ───────────────────────────────────────────────────────────────
-    CatalogApp {
-        id: "steam",
-        name: "Steam",
-        publisher: "Valve",
-        desc_en: "PC gaming platform, store and library",
-        desc_pt: "Principal plataforma e biblioteca de jogos para PC",
-        category: AppCategory::Gaming,
-        winget_id: "Valve.Steam",
-        direct: Some(DirectSource::StaticUrl {
+    app_entry!(
+        "steam", "Steam", "Valve", "store.steampowered.com",
+        "PC gaming platform, store and library", "Principal plataforma e biblioteca de jogos para PC",
+        AppCategory::Gaming, "Valve.Steam",
+        Some(DirectSource::StaticUrl {
             url: "https://cdn.fastly.steamstatic.com/client/installer/SteamSetup.exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["steam"],
-        presets: &[PresetKind::Gaming],
-    },
-    CatalogApp {
-        id: "epic",
-        name: "Epic Games Launcher",
-        publisher: "Epic Games",
-        desc_en: "Store, Unreal Engine hub and weekly free games",
-        desc_pt: "Loja Epic Games, Unreal Engine e jogos grátis semanais",
-        category: AppCategory::Gaming,
-        winget_id: "EpicGames.EpicGamesLauncher",
-        direct: Some(DirectSource::StaticUrl {
+        &["steam"], &[PresetKind::Gaming]
+    ),
+    app_entry!(
+        "epic", "Epic Games Launcher", "Epic Games", "epicgames.com",
+        "Epic storefront, Unreal Engine and weekly games", "Loja Epic Games, Unreal Engine e jogos semanais",
+        AppCategory::Gaming, "EpicGames.EpicGamesLauncher",
+        Some(DirectSource::StaticUrl {
             url: "https://launcher-public-service-prod06.ol.epicgames.com/launcher/api/installer/download/EpicGamesLauncherInstaller.msi",
-            kind: InstallerKind::Msi,
-            silent_args: &["/qn", "/norestart"],
+            kind: InstallerKind::Msi, silent_args: &["/qn", "/norestart"],
         }),
-        detect_keywords: &["epic games launcher"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "prism_launcher",
-        name: "Prism Launcher",
-        publisher: "Prism Launcher",
-        desc_en: "Fast, open-source multi-instance Minecraft launcher",
-        desc_pt: "Launcher open-source leve e rápido para Minecraft",
-        category: AppCategory::Gaming,
-        winget_id: "PrismLauncher.PrismLauncher",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "PrismLauncher/PrismLauncher",
-            asset_contains: &["Windows-MSVC-Setup"],
-            asset_excludes: &["arm64", "Portable"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/VERYSILENT", "/NORESTART"],
+        &["epic games launcher"], &[]
+    ),
+    app_entry!(
+        "battlenet", "Battle.net", "Blizzard", "battle.net",
+        "Blizzard launcher for Overwatch, WoW & Diablo", "Launcher oficial da Blizzard",
+        AppCategory::Gaming, "Blizzard.BattleNet", None, &["battle.net"], &[]
+    ),
+    app_entry!(
+        "ea_app", "EA App", "Electronic Arts", "ea.com",
+        "Electronic Arts PC storefront and launcher", "Plataforma oficial de jogos da EA",
+        AppCategory::Gaming, "ElectronicArts.EADesktop", None, &["ea app"], &[]
+    ),
+    app_entry!(
+        "prism_launcher", "Prism Launcher", "Prism Launcher", "prismlauncher.org",
+        "Fast open-source multi-instance Minecraft launcher", "Launcher open-source rápido para Minecraft",
+        AppCategory::Gaming, "PrismLauncher.PrismLauncher",
+        Some(DirectSource::GitHubRelease {
+            repo: "PrismLauncher/PrismLauncher", asset_contains: &["Windows-MSVC-Setup"],
+            asset_excludes: &["arm64", "Portable"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/VERYSILENT", "/NORESTART"],
         }),
-        detect_keywords: &["prism launcher"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "playnite",
-        name: "Playnite",
-        publisher: "Josef Nemec",
-        desc_en: "Unified open-source library for all game launchers",
-        desc_pt: "Biblioteca unificada open-source para todos seus jogos",
-        category: AppCategory::Gaming,
-        winget_id: "Playnite.Playnite",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "JosefNemec/Playnite",
-            asset_contains: &["Playnite"],
-            asset_excludes: &["Portable"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/VERYSILENT", "/NORESTART"],
+        &["prism launcher"], &[]
+    ),
+    app_entry!(
+        "modrinth", "Modrinth App", "Modrinth", "modrinth.com",
+        "Clean modern Minecraft modpack launcher", "Launcher moderno para modpacks no Modrinth",
+        AppCategory::Gaming, "Modrinth.ModrinthApp", None, &["modrinth"], &[]
+    ),
+    app_entry!(
+        "playnite", "Playnite", "Josef Nemec", "playnite.link",
+        "Unified library across all game launchers", "Biblioteca unificada para todos seus jogos",
+        AppCategory::Gaming, "Playnite.Playnite",
+        Some(DirectSource::GitHubRelease {
+            repo: "JosefNemec/Playnite", asset_contains: &["Playnite"],
+            asset_excludes: &["Portable"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/VERYSILENT", "/NORESTART"],
         }),
-        detect_keywords: &["playnite"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "msi_afterburner",
-        name: "MSI Afterburner",
-        publisher: "MSI",
-        desc_en: "GPU tuning, fan curves and RivaTuner FPS overlay",
-        desc_pt: "Monitoramento de FPS, curvas de fan e overclock de GPU",
-        category: AppCategory::Gaming,
-        winget_id: "Guru3D.Afterburner",
-        direct: None,
-        detect_keywords: &["msi afterburner"],
-        presets: &[PresetKind::Gaming],
-    },
-    CatalogApp {
-        id: "hwinfo",
-        name: "HWiNFO64",
-        publisher: "REALiX",
-        desc_en: "Precision hardware sensors, temps and diagnostics",
-        desc_pt: "Monitoramento preciso de temperaturas e sensores",
-        category: AppCategory::Gaming,
-        winget_id: "REALiX.HWiNFO",
-        direct: None,
-        detect_keywords: &["hwinfo"],
-        presets: &[PresetKind::Gaming],
-    },
-    CatalogApp {
-        id: "parsec",
-        name: "Parsec",
-        publisher: "Unity / Parsec",
-        desc_en: "Ultra-low latency remote desktop and co-op streaming",
-        desc_pt: "Acesso remoto e streaming de jogos com latência mínima",
-        category: AppCategory::Gaming,
-        winget_id: "Parsec.Parsec",
-        direct: Some(DirectSource::StaticUrl {
+        &["playnite"], &[]
+    ),
+    app_entry!(
+        "msi_afterburner", "MSI Afterburner", "MSI", "msi.com",
+        "GPU tuning, fan curves and RivaTuner FPS HUD", "Monitoramento de FPS, curvas de fan e overclock",
+        AppCategory::Gaming, "Guru3D.Afterburner", None, &["msi afterburner"], &[PresetKind::Gaming]
+    ),
+    app_entry!(
+        "hwinfo", "HWiNFO64", "REALiX", "hwinfo.com",
+        "Precision hardware sensors and diagnostics", "Monitoramento preciso de temperaturas e sensores",
+        AppCategory::Gaming, "REALiX.HWiNFO", None, &["hwinfo"], &[PresetKind::Gaming]
+    ),
+    app_entry!(
+        "parsec", "Parsec", "Unity / Parsec", "parsec.app",
+        "Ultra-low latency remote desktop and streaming", "Acesso remoto e streaming com latência mínima",
+        AppCategory::Gaming, "Parsec.Parsec",
+        Some(DirectSource::StaticUrl {
             url: "https://builds.parsec.app/package/parsec-windows.exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/silent", "/shared"],
+            kind: InstallerKind::Exe, silent_args: &["/silent", "/shared"],
         }),
-        detect_keywords: &["parsec"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "fancontrol",
-        name: "FanControl",
-        publisher: "Rem0o",
-        desc_en: "Focused, ultra-lightweight fan speed control software",
-        desc_pt: "Controle avançado e leve de ventoinhas do PC",
-        category: AppCategory::Gaming,
-        winget_id: "Rem0o.FanControl",
-        direct: None,
-        detect_keywords: &["fancontrol"],
-        presets: &[],
-    },
+        &["parsec"], &[]
+    ),
+    app_entry!(
+        "fancontrol", "FanControl", "Rem0o", "getfancontrol.com",
+        "Lightweight custom GPU & case fan curves", "Controle avançado e leve de ventoinhas do PC",
+        AppCategory::Gaming, "Rem0o.FanControl", None, &["fancontrol"], &[]
+    ),
 
     // ── MEDIA & CREATIVE ─────────────────────────────────────────────────────
-    CatalogApp {
-        id: "vlc",
-        name: "VLC Media Player",
-        publisher: "VideoLAN",
-        desc_en: "Open-source player that plays virtually any format",
-        desc_pt: "Reprodutor universal open-source para vídeos e áudio",
-        category: AppCategory::Media,
-        winget_id: "VideoLAN.VLC",
-        direct: None,
-        detect_keywords: &["vlc media player"],
-        presets: &[PresetKind::Essentials, PresetKind::Creator],
-    },
-    CatalogApp {
-        id: "obs",
-        name: "OBS Studio",
-        publisher: "OBS Project",
-        desc_en: "Industry-standard recording and live streaming studio",
-        desc_pt: "Gravação de tela e transmissão ao vivo profissional",
-        category: AppCategory::Media,
-        winget_id: "OBSProject.OBSStudio",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "obsproject/obs-studio",
-            asset_contains: &["Windows-x64-Installer"],
-            asset_excludes: &["arm64"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+    app_entry!(
+        "vlc", "VLC Media Player", "VideoLAN", "videolan.org",
+        "Universal open-source audio & video player", "Reprodutor universal open-source para qualquer mídia",
+        AppCategory::Media, "VideoLAN.VLC", None, &["vlc media player"], &[PresetKind::Essentials, PresetKind::Creator]
+    ),
+    app_entry!(
+        "obs", "OBS Studio", "OBS Project", "obsproject.com",
+        "Studio-grade screen recording and streaming", "Gravação de tela e transmissão ao vivo profissional",
+        AppCategory::Media, "OBSProject.OBSStudio",
+        Some(DirectSource::GitHubRelease {
+            repo: "obsproject/obs-studio", asset_contains: &["Windows-x64-Installer"],
+            asset_excludes: &["arm64"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["obs studio"],
-        presets: &[PresetKind::Gaming, PresetKind::Creator],
-    },
-    CatalogApp {
-        id: "spotify",
-        name: "Spotify",
-        publisher: "Spotify AB",
-        desc_en: "Music and podcast streaming desktop client",
-        desc_pt: "Streaming de músicas e podcasts para desktop",
-        category: AppCategory::Media,
-        winget_id: "Spotify.Spotify",
-        direct: Some(DirectSource::StaticUrl {
+        &["obs studio"], &[PresetKind::Gaming, PresetKind::Creator]
+    ),
+    app_entry!(
+        "spotify", "Spotify", "Spotify AB", "spotify.com",
+        "Music and podcast streaming client", "Streaming de músicas e podcasts",
+        AppCategory::Media, "Spotify.Spotify",
+        Some(DirectSource::StaticUrl {
             url: "https://download.scdn.co/SpotifySetup.exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/silent"],
+            kind: InstallerKind::Exe, silent_args: &["/silent"],
         }),
-        detect_keywords: &["spotify"],
-        presets: &[PresetKind::Gaming],
-    },
-    CatalogApp {
-        id: "sharex",
-        name: "ShareX",
-        publisher: "ShareX Team",
-        desc_en: "Instant screenshot, GIF capture and workflow tool",
-        desc_pt: "Captura de tela, gravação rápida e ferramentas visuais",
-        category: AppCategory::Media,
-        winget_id: "ShareX.ShareX",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "ShareX/ShareX",
-            asset_contains: &["setup"],
-            asset_excludes: &["portable"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/VERYSILENT", "/NORESTART"],
+        &["spotify"], &[PresetKind::Gaming]
+    ),
+    app_entry!(
+        "sharex", "ShareX", "ShareX Team", "getsharex.com",
+        "Instant screenshot, GIF capture and workflows", "Captura de tela, GIFs e ferramentas visuais",
+        AppCategory::Media, "ShareX.ShareX",
+        Some(DirectSource::GitHubRelease {
+            repo: "ShareX/ShareX", asset_contains: &["setup"],
+            asset_excludes: &["portable"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/VERYSILENT", "/NORESTART"],
         }),
-        detect_keywords: &["sharex"],
-        presets: &[PresetKind::Essentials, PresetKind::Creator],
-    },
-    CatalogApp {
-        id: "audacity",
-        name: "Audacity",
-        publisher: "Muse Group",
-        desc_en: "Free multi-track audio recorder and editor",
-        desc_pt: "Editor e gravador de áudio multipista gratuito",
-        category: AppCategory::Media,
-        winget_id: "Audacity.Audacity",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "audacity/audacity",
-            asset_contains: &["64bit"],
-            asset_excludes: &["zip"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/VERYSILENT", "/NORESTART"],
+        &["sharex"], &[PresetKind::Essentials, PresetKind::Creator]
+    ),
+    app_entry!(
+        "flameshot", "Flameshot", "Flameshot", "flameshot.org",
+        "Clean annotated screenshot capture utility", "Captura de tela com anotações rápidas",
+        AppCategory::Media, "Flameshot.Flameshot", None, &["flameshot"], &[]
+    ),
+    app_entry!(
+        "audacity", "Audacity", "Muse Group", "audacityteam.org",
+        "Multi-track audio recorder and editor", "Editor e gravador de áudio multipista",
+        AppCategory::Media, "Audacity.Audacity",
+        Some(DirectSource::GitHubRelease {
+            repo: "audacity/audacity", asset_contains: &["64bit"],
+            asset_excludes: &["zip"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/VERYSILENT", "/NORESTART"],
         }),
-        detect_keywords: &["audacity"],
-        presets: &[PresetKind::Creator],
-    },
-    CatalogApp {
-        id: "gimp",
-        name: "GIMP",
-        publisher: "GIMP Team",
-        desc_en: "Open-source raster graphics and photo editor",
-        desc_pt: "Editor de imagens e manipulação gráfica open-source",
-        category: AppCategory::Media,
-        winget_id: "GIMP.GIMP.3",
-        direct: None,
-        detect_keywords: &["gimp"],
-        presets: &[PresetKind::Creator],
-    },
-    CatalogApp {
-        id: "handbrake",
-        name: "HandBrake",
-        publisher: "HandBrake Team",
-        desc_en: "Fast open-source video transcoder with NVENC/AV1",
-        desc_pt: "Conversor de vídeo rápido com suporte NVENC e AV1",
-        category: AppCategory::Media,
-        winget_id: "HandBrake.HandBrake",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "HandBrake/HandBrake",
-            asset_contains: &["x86_64-Win_GUI"],
-            asset_excludes: &["arm64"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+        &["audacity"], &[PresetKind::Creator]
+    ),
+    app_entry!(
+        "gimp", "GIMP", "GIMP Team", "gimp.org",
+        "Open-source raster graphics editor", "Editor de imagens open-source completo",
+        AppCategory::Media, "GIMP.GIMP.3", None, &["gimp"], &[PresetKind::Creator]
+    ),
+    app_entry!(
+        "krita", "Krita", "KDE", "krita.org",
+        "Digital painting and illustration studio", "Pintura digital e ilustração profissional",
+        AppCategory::Media, "KDE.Krita", None, &["krita"], &[]
+    ),
+    app_entry!(
+        "inkscape", "Inkscape", "Inkscape", "inkscape.org",
+        "Open-source SVG vector graphics editor", "Editor vetorial SVG open-source",
+        AppCategory::Media, "Inkscape.Inkscape", None, &["inkscape"], &[]
+    ),
+    app_entry!(
+        "handbrake", "HandBrake", "HandBrake Team", "handbrake.fr",
+        "Fast video transcoder with NVENC & AV1", "Conversor de vídeo rápido com NVENC e AV1",
+        AppCategory::Media, "HandBrake.HandBrake",
+        Some(DirectSource::GitHubRelease {
+            repo: "HandBrake/HandBrake", asset_contains: &["x86_64-Win_GUI"],
+            asset_excludes: &["arm64"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["handbrake"],
-        presets: &[PresetKind::Creator],
-    },
-    CatalogApp {
-        id: "blender",
-        name: "Blender",
-        publisher: "Blender Foundation",
-        desc_en: "3D creation suite for modeling, rendering & VFX",
-        desc_pt: "Suíte 3D completa para modelagem, animação e VFX",
-        category: AppCategory::Media,
-        winget_id: "BlenderFoundation.Blender",
-        direct: None,
-        detect_keywords: &["blender"],
-        presets: &[PresetKind::Creator],
-    },
-    CatalogApp {
-        id: "paint_net",
-        name: "Paint.NET",
-        publisher: "dotPDN",
-        desc_en: "Clean, super-fast image editor for everyday work",
-        desc_pt: "Editor de imagens leve e extremamente rápido",
-        category: AppCategory::Media,
-        winget_id: "dotPDN.PaintDotNet",
-        direct: None,
-        detect_keywords: &["paint.net"],
-        presets: &[],
-    },
+        &["handbrake"], &[PresetKind::Creator]
+    ),
+    app_entry!(
+        "blender", "Blender", "Blender Foundation", "blender.org",
+        "3D modeling, animation, rendering & VFX", "Suíte 3D completa para modelagem e VFX",
+        AppCategory::Media, "BlenderFoundation.Blender", None, &["blender"], &[PresetKind::Creator]
+    ),
+    app_entry!(
+        "paint_net", "Paint.NET", "dotPDN", "getpaint.net",
+        "Fast, lightweight everyday image editor", "Editor de imagens leve e super rápido",
+        AppCategory::Media, "dotPDN.PaintDotNet", None, &["paint.net"], &[]
+    ),
 
     // ── UTILITIES ────────────────────────────────────────────────────────────
-    CatalogApp {
-        id: "7zip",
-        name: "7-Zip",
-        publisher: "Igor Pavlov",
-        desc_en: "Ultra-fast high-compression archive manager",
-        desc_pt: "Compactador ultrarrápido com alta taxa de compressão",
-        category: AppCategory::Utilities,
-        winget_id: "7zip.7zip",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "ip7z/7zip",
-            asset_contains: &["-x64"],
-            asset_excludes: &["arm64", "extra"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+    app_entry!(
+        "7zip", "7-Zip", "Igor Pavlov", "7-zip.org",
+        "Ultra-fast high-compression archive utility", "Compactador ultrarrápido de arquivos",
+        AppCategory::Utilities, "7zip.7zip",
+        Some(DirectSource::GitHubRelease {
+            repo: "ip7z/7zip", asset_contains: &["-x64"],
+            asset_excludes: &["arm64", "extra"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["7-zip"],
-        presets: &[PresetKind::Essentials, PresetKind::Developer, PresetKind::Gaming, PresetKind::Creator],
-    },
-    CatalogApp {
-        id: "nanazip",
-        name: "NanaZip",
-        publisher: "M2-Team",
-        desc_en: "Modern 7-Zip fork with native Windows 11 context menu",
-        desc_pt: "Fork moderno do 7-Zip com menu nativo do Windows 11",
-        category: AppCategory::Utilities,
-        winget_id: "M2Team.NanaZip",
-        direct: None,
-        detect_keywords: &["nanazip"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "everything",
-        name: "Everything",
-        publisher: "voidtools",
-        desc_en: "Instant NTFS file search across millions of files",
-        desc_pt: "Busca instantânea de arquivos no PC em milissegundos",
-        category: AppCategory::Utilities,
-        winget_id: "voidtools.Everything",
-        direct: Some(DirectSource::StaticUrl {
+        &["7-zip"], &[PresetKind::Essentials, PresetKind::Developer, PresetKind::Gaming, PresetKind::Creator]
+    ),
+    app_entry!(
+        "nanazip", "NanaZip", "M2-Team", "github.com",
+        "Modern 7-Zip fork for Windows 11 context menu", "Fork moderno do 7-Zip com menu do Windows 11",
+        AppCategory::Utilities, "M2Team.NanaZip", None, &["nanazip"], &[]
+    ),
+    app_entry!(
+        "winrar", "WinRAR", "RARLAB", "win-rar.com",
+        "Classic RAR & ZIP archive manager", "Compactador clássico RAR e ZIP",
+        AppCategory::Utilities, "RARLab.WinRAR", None, &["winrar"], &[]
+    ),
+    app_entry!(
+        "everything", "Everything", "voidtools", "voidtools.com",
+        "Instant NTFS search across millions of files", "Busca instantânea de arquivos em milissegundos",
+        AppCategory::Utilities, "voidtools.Everything",
+        Some(DirectSource::StaticUrl {
             url: "https://www.voidtools.com/Everything-1.4.1.1026.x64-Setup.exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["everything"],
-        presets: &[PresetKind::Essentials, PresetKind::Developer, PresetKind::Gaming, PresetKind::Creator],
-    },
-    CatalogApp {
-        id: "powertoys",
-        name: "Microsoft PowerToys",
-        publisher: "Microsoft",
-        desc_en: "FancyZones, Command Palette, Color Picker & more",
-        desc_pt: "Suite oficial de produtividade: FancyZones, Color Picker e mais",
-        category: AppCategory::Utilities,
-        winget_id: "Microsoft.PowerToys",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "microsoft/PowerToys",
-            asset_contains: &["PowerToysUserSetup", "x64"],
-            asset_excludes: &["ARM64"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["--silent"],
+        &["everything"], &[PresetKind::Essentials, PresetKind::Developer, PresetKind::Gaming, PresetKind::Creator]
+    ),
+    app_entry!(
+        "powertoys", "Microsoft PowerToys", "Microsoft", "learn.microsoft.com",
+        "FancyZones, Command Palette, Color Picker & more", "FancyZones, Command Palette, Color Picker e mais",
+        AppCategory::Utilities, "Microsoft.PowerToys",
+        Some(DirectSource::GitHubRelease {
+            repo: "microsoft/PowerToys", asset_contains: &["PowerToysUserSetup", "x64"],
+            asset_excludes: &["ARM64"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["--silent"],
         }),
-        detect_keywords: &["powertoys"],
-        presets: &[PresetKind::Essentials, PresetKind::Developer],
-    },
-    CatalogApp {
-        id: "wiztree",
-        name: "WizTree",
-        publisher: "Antibody Software",
-        desc_en: "Fastest disk space analyzer using the NTFS MFT",
-        desc_pt: "Analisador de espaço em disco mais rápido do Windows",
-        category: AppCategory::Utilities,
-        winget_id: "AntibodySoftware.WizTree",
-        direct: None,
-        detect_keywords: &["wiztree"],
-        presets: &[PresetKind::Essentials],
-    },
-    CatalogApp {
-        id: "notepadpp",
-        name: "Notepad++",
-        publisher: "Don Ho",
-        desc_en: "Blazing-fast lightweight text & code editor",
-        desc_pt: "Editor de texto e código extremamente leve e rápido",
-        category: AppCategory::Utilities,
-        winget_id: "Notepad++.Notepad++",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "notepad-plus-plus/notepad-plus-plus",
-            asset_contains: &["Installer.x64"],
-            asset_excludes: &["arm64"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+        &["powertoys"], &[PresetKind::Essentials, PresetKind::Developer]
+    ),
+    app_entry!(
+        "wiztree", "WizTree", "Antibody Software", "diskanalyzer.com",
+        "Fastest NTFS disk space analyzer", "Analisador de espaço em disco mais rápido",
+        AppCategory::Utilities, "AntibodySoftware.WizTree", None, &["wiztree"], &[PresetKind::Essentials]
+    ),
+    app_entry!(
+        "notepadpp", "Notepad++", "Don Ho", "notepad-plus-plus.org",
+        "Blazing-fast lightweight text & code editor", "Editor de texto e código extremamente leve",
+        AppCategory::Utilities, "Notepad++.Notepad++",
+        Some(DirectSource::GitHubRelease {
+            repo: "notepad-plus-plus/notepad-plus-plus", asset_contains: &["Installer.x64"],
+            asset_excludes: &["arm64"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["notepad++"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "localsend",
-        name: "LocalSend",
-        publisher: "LocalSend",
-        desc_en: "Open-source AirDrop alternative over local Wi-Fi",
-        desc_pt: "Alternativa open-source ao AirDrop na rede local",
-        category: AppCategory::Utilities,
-        winget_id: "LocalSend.LocalSend",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "localsend/localsend",
-            asset_contains: &["windows-x86-64"],
-            asset_excludes: &["zip"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/VERYSILENT", "/NORESTART"],
+        &["notepad++"], &[]
+    ),
+    app_entry!(
+        "localsend", "LocalSend", "LocalSend", "localsend.org",
+        "Open-source AirDrop over local Wi-Fi", "Alternativa open-source ao AirDrop na rede local",
+        AppCategory::Utilities, "LocalSend.LocalSend",
+        Some(DirectSource::GitHubRelease {
+            repo: "localsend/localsend", asset_contains: &["windows-x86-64"],
+            asset_excludes: &["zip"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/VERYSILENT", "/NORESTART"],
         }),
-        detect_keywords: &["localsend"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "qbittorrent",
-        name: "qBittorrent",
-        publisher: "qBittorrent Project",
-        desc_en: "Clean, ad-free open-source BitTorrent client",
-        desc_pt: "Cliente BitTorrent open-source limpo e sem anúncios",
-        category: AppCategory::Utilities,
-        winget_id: "qBittorrent.qBittorrent",
-        direct: None,
-        detect_keywords: &["qbittorrent"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "eartrumpet",
-        name: "EarTrumpet",
-        publisher: "File-New-Project",
-        desc_en: "Per-app volume mixer right in the Windows taskbar",
-        desc_pt: "Controle de volume individual por aplicativo na barra",
-        category: AppCategory::Utilities,
-        winget_id: "File-New-Project.EarTrumpet",
-        direct: None,
-        detect_keywords: &["eartrumpet"],
-        presets: &[PresetKind::Gaming],
-    },
-    CatalogApp {
-        id: "tailscale",
-        name: "Tailscale",
-        publisher: "Tailscale Inc.",
-        desc_en: "Zero-config WireGuard mesh VPN for your devices",
-        desc_pt: "Rede privada WireGuard instantânea entre seus dispositivos",
-        category: AppCategory::Utilities,
-        winget_id: "Tailscale.Tailscale",
-        direct: None,
-        detect_keywords: &["tailscale"],
-        presets: &[],
-    },
+        &["localsend"], &[]
+    ),
+    app_entry!(
+        "qbittorrent", "qBittorrent", "qBittorrent Project", "qbittorrent.org",
+        "Clean ad-free open-source BitTorrent client", "Cliente BitTorrent open-source limpo",
+        AppCategory::Utilities, "qBittorrent.qBittorrent", None, &["qbittorrent"], &[]
+    ),
+    app_entry!(
+        "eartrumpet", "EarTrumpet", "File-New-Project", "eartrumpet.app",
+        "Per-app volume control in the taskbar", "Mixer de volume individual por app na barra",
+        AppCategory::Utilities, "File-New-Project.EarTrumpet", None, &["eartrumpet"], &[PresetKind::Gaming]
+    ),
+    app_entry!(
+        "cpuz", "CPU-Z", "CPUID", "cpuid.com",
+        "Detailed CPU, motherboard and memory specs", "Informações detalhadas de CPU, placa-mãe e RAM",
+        AppCategory::Utilities, "CPUID.CPU-Z", None, &["cpu-z"], &[]
+    ),
+    app_entry!(
+        "crystaldiskinfo", "CrystalDiskInfo", "Crystal Dew World", "crystalmark.info",
+        "SSD & HDD S.M.A.R.T. health and temperature", "Saúde S.M.A.R.T. e temperatura de SSDs e HDs",
+        AppCategory::Utilities, "CrystalDewWorld.CrystalDiskInfo", None, &["crystaldiskinfo"], &[]
+    ),
+    app_entry!(
+        "tailscale", "Tailscale", "Tailscale Inc.", "tailscale.com",
+        "Zero-config WireGuard mesh VPN", "Rede privada WireGuard instantânea",
+        AppCategory::Utilities, "Tailscale.Tailscale", None, &["tailscale"], &[]
+    ),
+    app_entry!(
+        "cloudflare_warp", "Cloudflare WARP", "Cloudflare", "one.one.one.one",
+        "Fast encrypted 1.1.1.1 DNS & tunnel", "DNS criptografado 1.1.1.1 rápido da Cloudflare",
+        AppCategory::Utilities, "Cloudflare.Warp", None, &["cloudflare warp"], &[]
+    ),
 
     // ── PRODUCTIVITY ─────────────────────────────────────────────────────────
-    CatalogApp {
-        id: "obsidian",
-        name: "Obsidian",
-        publisher: "Obsidian",
-        desc_en: "Private, local-first Markdown knowledge base",
-        desc_pt: "Base de conhecimento e notas em Markdown local-first",
-        category: AppCategory::Productivity,
-        winget_id: "Obsidian.Obsidian",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "obsidianmd/obsidian-releases",
-            asset_contains: &["Obsidian-"],
-            asset_excludes: &["arm64"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+    app_entry!(
+        "obsidian", "Obsidian", "Obsidian", "obsidian.md",
+        "Private local-first Markdown knowledge base", "Base de notas em Markdown local-first",
+        AppCategory::Productivity, "Obsidian.Obsidian",
+        Some(DirectSource::GitHubRelease {
+            repo: "obsidianmd/obsidian-releases", asset_contains: &["Obsidian-"],
+            asset_excludes: &["arm64"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["obsidian"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "notion",
-        name: "Notion",
-        publisher: "Notion Labs",
-        desc_en: "Connected docs, wikis and project workspace",
-        desc_pt: "Documentos, wikis e gestão de projetos em um lugar",
-        category: AppCategory::Productivity,
-        winget_id: "Notion.Notion",
-        direct: None,
-        detect_keywords: &["notion"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "sumatrapdf",
-        name: "SumatraPDF",
-        publisher: "Krzysztof Kowalczyk",
-        desc_en: "Instant-loading minimal PDF, ePub and CBZ reader",
-        desc_pt: "Leitor de PDF e ePub minimalista com abertura instantânea",
-        category: AppCategory::Productivity,
-        winget_id: "SumatraPDF.SumatraPDF",
-        direct: None,
-        detect_keywords: &["sumatrapdf"],
-        presets: &[PresetKind::Essentials],
-    },
-    CatalogApp {
-        id: "bitwarden",
-        name: "Bitwarden",
-        publisher: "Bitwarden Inc.",
-        desc_en: "Open-source cross-platform password manager",
-        desc_pt: "Gerenciador de senhas open-source e auditado",
-        category: AppCategory::Productivity,
-        winget_id: "Bitwarden.Bitwarden",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "bitwarden/clients",
-            asset_contains: &["Bitwarden-Installer"],
-            asset_excludes: &["arm64"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["/S"],
+        &["obsidian"], &[]
+    ),
+    app_entry!(
+        "notion", "Notion", "Notion Labs", "notion.so",
+        "Connected docs, wikis and project workspace", "Documentos, wikis e gestão de projetos",
+        AppCategory::Productivity, "Notion.Notion", None, &["notion"], &[]
+    ),
+    app_entry!(
+        "sumatrapdf", "SumatraPDF", "Krzysztof Kowalczyk", "sumatrapdfreader.org",
+        "Instant-loading minimal PDF and ePub reader", "Leitor de PDF e ePub minimalista instantâneo",
+        AppCategory::Productivity, "SumatraPDF.SumatraPDF", None, &["sumatrapdf"], &[PresetKind::Essentials]
+    ),
+    app_entry!(
+        "bitwarden", "Bitwarden", "Bitwarden Inc.", "bitwarden.com",
+        "Open-source cross-platform password manager", "Gerenciador de senhas open-source auditado",
+        AppCategory::Productivity, "Bitwarden.Bitwarden",
+        Some(DirectSource::GitHubRelease {
+            repo: "bitwarden/clients", asset_contains: &["Bitwarden-Installer"],
+            asset_excludes: &["arm64"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["/S"],
         }),
-        detect_keywords: &["bitwarden"],
-        presets: &[],
-    },
-    CatalogApp {
-        id: "rustdesk",
-        name: "RustDesk",
-        publisher: "RustDesk",
-        desc_en: "Fast open-source remote desktop built in Rust",
-        desc_pt: "Acesso remoto open-source rápido feito em Rust",
-        category: AppCategory::Productivity,
-        winget_id: "RustDesk.RustDesk",
-        direct: Some(DirectSource::GitHubRelease {
-            repo: "rustdesk/rustdesk",
-            asset_contains: &["x86_64"],
-            asset_excludes: &["sciter", "msi"],
-            asset_ends_with: ".exe",
-            kind: InstallerKind::Exe,
-            silent_args: &["--silent-install"],
+        &["bitwarden"], &[]
+    ),
+    app_entry!(
+        "rustdesk", "RustDesk", "RustDesk", "rustdesk.com",
+        "Fast open-source remote desktop built in Rust", "Acesso remoto open-source rápido feito em Rust",
+        AppCategory::Productivity, "RustDesk.RustDesk",
+        Some(DirectSource::GitHubRelease {
+            repo: "rustdesk/rustdesk", asset_contains: &["x86_64"],
+            asset_excludes: &["sciter", "msi"], asset_ends_with: ".exe",
+            kind: InstallerKind::Exe, silent_args: &["--silent-install"],
         }),
-        detect_keywords: &["rustdesk"],
-        presets: &[],
-    },
+        &["rustdesk"], &[]
+    ),
+    app_entry!(
+        "libreoffice", "LibreOffice", "The Document Foundation", "libreoffice.org",
+        "Free open-source office document suite", "Suíte de escritório gratuita e open-source",
+        AppCategory::Productivity, "TheDocumentFoundation.LibreOffice", None, &["libreoffice"], &[]
+    ),
 ];
 
 #[cfg(test)]
@@ -956,10 +670,10 @@ mod tests {
         for app in catalog() {
             assert!(!app.id.is_empty());
             assert!(!app.winget_id.is_empty());
+            assert!(!app.domain.is_empty());
             assert!(!app.detect_keywords.is_empty());
             assert!(ids.insert(app.id), "Duplicate catalog id: {}", app.id);
         }
-        assert!(catalog().len() >= 50);
+        assert!(catalog().len() >= 70);
     }
 }
-

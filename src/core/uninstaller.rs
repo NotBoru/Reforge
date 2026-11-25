@@ -1,11 +1,15 @@
+use crate::core::app_icons::parse_icon_spec;
 use crate::core::winapi::hidden_tokio_cmd;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
+use std::mem;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 use walkdir::WalkDir;
 use winreg::enums::*;
-use winreg::{HKEY, RegKey};
+use winreg::{RegKey, HKEY};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegRoot {
@@ -38,11 +42,46 @@ pub struct InstalledApp {
     pub install_date: String,
     pub estimated_size_bytes: u64,
     pub install_location: String,
+    pub display_icon: String,
     pub uninstall_string: String,
     pub quiet_uninstall_string: String,
     pub reg_root: RegRoot,
     pub reg_subkey: String,
     pub is_msi: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct AppProcess {
+    pub pid: u32,
+    pub exe_name: String,
+    pub image_path: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum UninstallStage {
+    Queued,
+    ClosingProcesses(usize),
+    RunningUninstaller,
+    Verifying,
+    Removed { reboot_required: bool },
+    StillPresent(String),
+    Failed(String),
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct UninstallProgressEvent {
+    pub app_id: String,
+    pub app_name: String,
+    pub stage: UninstallStage,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UninstallOptions {
+    pub close_processes: bool,
+    pub force_terminate_if_hung: bool,
+    pub prefer_quiet: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +181,7 @@ pub fn scan_installed_apps(include_system: bool) -> Vec<InstalledApp> {
             let version: String = sub.get_value("DisplayVersion").unwrap_or_default();
             let publisher: String = sub.get_value("Publisher").unwrap_or_default();
             let install_location: String = sub.get_value("InstallLocation").unwrap_or_default();
+            let display_icon: String = sub.get_value("DisplayIcon").unwrap_or_default();
             let raw_date: String = sub.get_value("InstallDate").unwrap_or_default();
             let size_kb: u32 = sub.get_value("EstimatedSize").unwrap_or(0);
             let win_inst: u32 = sub.get_value("WindowsInstaller").unwrap_or(0);
@@ -157,8 +197,7 @@ pub fn scan_installed_apps(include_system: bool) -> Vec<InstalledApp> {
             }
 
             let reg_subkey = format!("{base_path}\\{sub_name}");
-            let is_msi = win_inst == 1
-                || uninstall_string.to_lowercase().contains("msiexec");
+            let is_msi = win_inst == 1 || uninstall_string.to_lowercase().contains("msiexec");
 
             apps.push(InstalledApp {
                 id: format!("{}\\{}", root.as_str(), reg_subkey),
@@ -168,6 +207,7 @@ pub fn scan_installed_apps(include_system: bool) -> Vec<InstalledApp> {
                 install_date: format_reg_date(&raw_date),
                 estimated_size_bytes: (size_kb as u64) * 1024,
                 install_location: install_location.trim().trim_matches('"').to_string(),
+                display_icon: display_icon.trim().to_string(),
                 uninstall_string: uninstall_string.trim().to_string(),
                 quiet_uninstall_string: quiet_uninstall_string.trim().to_string(),
                 reg_root: root,
@@ -190,8 +230,254 @@ fn format_reg_date(raw: &str) -> String {
     }
 }
 
-/// Runs the application's native uninstaller (supports silent/quiet mode when available).
-pub async fn run_native_uninstaller(app: &InstalledApp, prefer_quiet: bool) -> Result<(), String> {
+// ── SAFE PROCESS DISCOVERY & GRACEFUL SHUTDOWN LIFECYCLE ─────────────────────
+
+/// Hardcoded critical Windows system executables that Reforge will NEVER touch.
+const CRITICAL_SYSTEM_PROCESSES: &[&str] = &[
+    "system",
+    "registry",
+    "smss.exe",
+    "csrss.exe",
+    "wininit.exe",
+    "winlogon.exe",
+    "services.exe",
+    "lsass.exe",
+    "svchost.exe",
+    "dwm.exe",
+    "explorer.exe",
+    "conhost.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "msiexec.exe",
+    "taskmgr.exe",
+    "taskhostw.exe",
+    "sihost.exe",
+    "ctfmon.exe",
+    "audiodg.exe",
+    "spoolsv.exe",
+    "fontdrvhost.exe",
+    "runtimebroker.exe",
+    "searchhost.exe",
+    "shellexperiencehost.exe",
+    "startmenuexperiencehost.exe",
+    "securityhealthservice.exe",
+    "msmpeng.exe",
+    "reforge.exe",
+];
+
+fn is_critical_system_process(exe_name_lower: &str, image_path_lower: &str) -> bool {
+    if CRITICAL_SYSTEM_PROCESSES.contains(&exe_name_lower) {
+        return true;
+    }
+    if image_path_lower.starts_with(r"c:\windows\") {
+        return true;
+    }
+    false
+}
+
+/// Safely finds running processes genuinely owned by `app` using strict executable image path verification.
+/// Never matches by loose executable name substrings; never returns Windows system processes.
+pub fn find_verified_app_processes(app: &InstalledApp) -> Vec<AppProcess> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let mut verified_prefixes: Vec<String> = Vec::new();
+    if !app.install_location.is_empty() {
+        let loc = Path::new(&app.install_location);
+        if is_safe_install_dir(loc) {
+            let mut norm = app.install_location.to_lowercase();
+            while norm.ends_with('\\') {
+                norm.pop();
+            }
+            norm.push('\\');
+            verified_prefixes.push(norm);
+        }
+    }
+
+    let mut verified_exact_exes: Vec<String> = Vec::new();
+    if let Some((icon_path, _)) = parse_icon_spec(&app.display_icon) {
+        if icon_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("exe"))
+            .unwrap_or(false)
+        {
+            let lower = icon_path.to_string_lossy().to_lowercase();
+            if !lower.starts_with(r"c:\windows\") {
+                verified_exact_exes.push(lower);
+            }
+        }
+    }
+
+    if verified_prefixes.is_empty() && verified_exact_exes.is_empty() {
+        return Vec::new();
+    }
+
+    let self_pid = unsafe { GetCurrentProcessId() };
+    let mut matched = Vec::new();
+
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE || snap.is_null() {
+            return matched;
+        }
+
+        let mut entry: PROCESSENTRY32W = mem::zeroed();
+        entry.dwSize = mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        if Process32FirstW(snap, &mut entry) != 0 {
+            loop {
+                let pid = entry.th32ProcessID;
+                if pid > 4 && pid != self_pid {
+                    let end = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    let exe_name = String::from_utf16_lossy(&entry.szExeFile[..end]);
+                    let exe_lower = exe_name.to_lowercase();
+
+                    if !CRITICAL_SYSTEM_PROCESSES.contains(&exe_lower.as_str()) {
+                        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+                        if !handle.is_null() {
+                            let mut buf = [0u16; 1024];
+                            let mut len = buf.len() as u32;
+                            if QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len)
+                                != 0
+                            {
+                                let img = String::from_utf16_lossy(&buf[..len as usize]);
+                                let img_lower = img.to_lowercase();
+                                if !is_critical_system_process(&exe_lower, &img_lower) {
+                                    let path_match = verified_prefixes
+                                        .iter()
+                                        .any(|pref| img_lower.starts_with(pref))
+                                        || verified_exact_exes.iter().any(|ex| img_lower == *ex);
+                                    if path_match {
+                                        matched.push(AppProcess {
+                                            pid,
+                                            exe_name,
+                                            image_path: img,
+                                        });
+                                    }
+                                }
+                            }
+                            CloseHandle(handle);
+                        }
+                    }
+                }
+                if Process32NextW(snap, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
+    }
+
+    matched
+}
+
+fn is_pid_running(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    const STILL_ACTIVE: u32 = 259;
+
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return false;
+        }
+        let mut code: u32 = 0;
+        let ok = GetExitCodeProcess(h, &mut code);
+        CloseHandle(h);
+        ok != 0 && code == STILL_ACTIVE
+    }
+}
+
+fn request_graceful_window_close(pids: &[u32]) {
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+    };
+
+    unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        unsafe {
+            let pids = &*(lparam as *const Vec<u32>);
+            let mut win_pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut win_pid);
+            if pids.contains(&win_pid) {
+                let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            }
+            1
+        }
+    }
+
+    let owned = pids.to_vec();
+    unsafe {
+        EnumWindows(Some(cb), &owned as *const Vec<u32> as LPARAM);
+    }
+}
+
+fn terminate_verified_pids(pids: &[u32]) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+
+    for &pid in pids {
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if !h.is_null() {
+                let _ = TerminateProcess(h, 1);
+                CloseHandle(h);
+            }
+        }
+    }
+}
+
+async fn shutdown_app_processes(procs: &[AppProcess], force_if_hung: bool) {
+    if procs.is_empty() {
+        return;
+    }
+    let pids: Vec<u32> = procs.iter().map(|p| p.pid).collect();
+    request_graceful_window_close(&pids);
+
+    // Wait up to 3.5 seconds for graceful shutdown
+    let deadline = Instant::now() + Duration::from_millis(3500);
+    while Instant::now() < deadline {
+        if pids.iter().all(|&pid| !is_pid_running(pid)) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(180)).await;
+    }
+
+    if force_if_hung {
+        let remaining: Vec<u32> = pids.into_iter().filter(|&p| is_pid_running(p)).collect();
+        if !remaining.is_empty() {
+            terminate_verified_pids(&remaining);
+            tokio::time::sleep(Duration::from_millis(350)).await;
+        }
+    }
+}
+
+fn uninstall_key_still_exists(app: &InstalledApp) -> bool {
+    let hive = RegKey::predef(app.reg_root.hkey());
+    hive.open_subkey_with_flags(&app.reg_subkey, KEY_READ).is_ok()
+}
+
+/// Runs the native uninstaller and returns `(exit_code, reboot_required)`.
+async fn execute_uninstall_command(
+    app: &InstalledApp,
+    prefer_quiet: bool,
+) -> Result<(i32, bool), String> {
     let cmdline = if prefer_quiet && !app.quiet_uninstall_string.is_empty() {
         app.quiet_uninstall_string.clone()
     } else if prefer_quiet && app.is_msi {
@@ -208,7 +494,6 @@ pub async fn run_native_uninstaller(app: &InstalledApp, prefer_quiet: bool) -> R
         return Err("No uninstall command registered for this application.".into());
     }
 
-    // Use cmd /C with exact command line so quoted/unquoted paths & args with spaces execute faithfully
     let mut cmd = hidden_tokio_cmd("cmd");
     cmd.raw_arg("/C");
     cmd.raw_arg(&cmdline);
@@ -218,12 +503,96 @@ pub async fn run_native_uninstaller(app: &InstalledApp, prefer_quiet: bool) -> R
         .map_err(|e| format!("Failed to launch uninstaller: {e}"))?;
 
     let code = status.code().unwrap_or(-1);
-    if status.success() || code == 3010 || code == 1605 {
-        Ok(())
+    let reboot = code == 3010 || code == 1641;
+    if status.success() || reboot || code == 1605 {
+        Ok((code, reboot))
     } else {
-        Err(format!(
-            "Uninstaller exited with code {code}. You can still run Deep Trace Scan below."
-        ))
+        Err(format!("Uninstaller exited with code {code}"))
+    }
+}
+
+/// Full verified uninstall lifecycle for one or multiple selected applications.
+/// Handles: verified process lookup -> graceful shutdown -> native uninstall -> registry verification.
+pub async fn run_bulk_uninstall_lifecycle(
+    apps: Vec<InstalledApp>,
+    opts: UninstallOptions,
+    tx: mpsc::UnboundedSender<UninstallProgressEvent>,
+) {
+    for app in &apps {
+        let _ = tx.send(UninstallProgressEvent {
+            app_id: app.id.clone(),
+            app_name: app.name.clone(),
+            stage: UninstallStage::Queued,
+        });
+    }
+
+    for app in apps {
+        // 1. Identify & close genuinely associated processes gracefully
+        if opts.close_processes {
+            let app_clone = app.clone();
+            let procs = tokio::task::spawn_blocking(move || find_verified_app_processes(&app_clone))
+                .await
+                .unwrap_or_default();
+            if !procs.is_empty() {
+                let _ = tx.send(UninstallProgressEvent {
+                    app_id: app.id.clone(),
+                    app_name: app.name.clone(),
+                    stage: UninstallStage::ClosingProcesses(procs.len()),
+                });
+                shutdown_app_processes(&procs, opts.force_terminate_if_hung).await;
+            }
+        }
+
+        // 2. Run native uninstaller
+        let _ = tx.send(UninstallProgressEvent {
+            app_id: app.id.clone(),
+            app_name: app.name.clone(),
+            stage: UninstallStage::RunningUninstaller,
+        });
+
+        let exec_res = execute_uninstall_command(&app, opts.prefer_quiet).await;
+
+        // 3. Verify whether the app was genuinely removed from Windows Registry
+        let _ = tx.send(UninstallProgressEvent {
+            app_id: app.id.clone(),
+            app_name: app.name.clone(),
+            stage: UninstallStage::Verifying,
+        });
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let still_exists = uninstall_key_still_exists(&app);
+        let final_stage = match exec_res {
+            Ok((_, reboot)) => {
+                if !still_exists {
+                    UninstallStage::Removed {
+                        reboot_required: reboot,
+                    }
+                } else if reboot {
+                    UninstallStage::Removed {
+                        reboot_required: true,
+                    }
+                } else {
+                    UninstallStage::StillPresent(
+                        "Uninstaller exited, but the app entry is still registered (canceled or background child still running).".into(),
+                    )
+                }
+            }
+            Err(err) => {
+                if !still_exists {
+                    UninstallStage::Removed {
+                        reboot_required: false,
+                    }
+                } else {
+                    UninstallStage::Failed(err)
+                }
+            }
+        };
+
+        let _ = tx.send(UninstallProgressEvent {
+            app_id: app.id,
+            app_name: app.name,
+            stage: final_stage,
+        });
     }
 }
 
@@ -236,7 +605,6 @@ pub fn force_remove_uninstall_entry(app: &InstalledApp) -> Result<(), String> {
 
 // ── REVO-STYLE DEEP TRACE SCANNER ────────────────────────────────────────────
 
-/// Strict safety denylist so broad vendor or Windows names are NEVER flagged as leftovers.
 const PROTECTED_TOKENS: &[&str] = &[
     "windows",
     "microsoft",
@@ -323,7 +691,15 @@ fn strip_version_suffix(name: &str) -> String {
             && (p.contains('.') || p.len() <= 5);
         let is_arch = matches!(
             lower.as_str(),
-            "(64-bit)" | "(32-bit)" | "64-bit" | "32-bit" | "x64" | "x86" | "(x64)" | "(x86)" | "(user)"
+            "(64-bit)"
+                | "(32-bit)"
+                | "64-bit"
+                | "32-bit"
+                | "x64"
+                | "x86"
+                | "(x64)"
+                | "(x86)"
+                | "(user)"
         );
         if is_ver || is_arch {
             break;
@@ -401,13 +777,40 @@ fn dir_size_bytes(path: &Path) -> u64 {
         return fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     }
     WalkDir::new(path)
+        .follow_links(false)
         .max_depth(6)
         .into_iter()
         .flatten()
+        .filter(|e| e.file_type().is_file())
         .filter_map(|e| e.metadata().ok())
-        .filter(|m| m.is_file())
         .map(|m| m.len())
         .sum()
+}
+
+pub fn deep_scan_traces_multi(apps: &[InstalledApp]) -> Vec<AppTrace> {
+    let mut all = Vec::new();
+    let mut seen = HashSet::new();
+    for app in apps {
+        for trace in deep_scan_traces(app) {
+            let key = if let Some(r) = trace.reg_root {
+                format!("{}\\{}", r.as_str(), trace.path).to_lowercase()
+            } else {
+                trace.path.to_lowercase()
+            };
+            if seen.insert(key) {
+                all.push(trace);
+            }
+        }
+    }
+    all.sort_by(|a, b| {
+        let ca = if a.confidence == TraceConfidence::High { 0 } else { 1 };
+        let cb = if b.confidence == TraceConfidence::High { 0 } else { 1 };
+        ca.cmp(&cb).then_with(|| b.size_bytes.cmp(&a.size_bytes))
+    });
+    for (idx, t) in all.iter_mut().enumerate() {
+        t.id = idx;
+    }
+    all
 }
 
 /// Revo-style parallel leftover trace scan across Filesystem, Registry, Shortcuts, Tasks & Services.
@@ -416,7 +819,6 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
     let mut traces: Vec<AppTrace> = Vec::new();
     let mut seen_paths: HashSet<String> = HashSet::new();
 
-    // 1. Check original InstallLocation directly (High confidence!)
     if !app.install_location.is_empty() {
         let loc = PathBuf::from(&app.install_location);
         if loc.exists() && is_safe_install_dir(&loc) {
@@ -435,7 +837,6 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
         }
     }
 
-    // 2. Parallel filesystem scan across AppData, LocalAppData, Programs, ProgramData, Program Files
     let mut scan_roots: Vec<(PathBuf, usize)> = Vec::new();
     if let Ok(v) = std::env::var("APPDATA") {
         scan_roots.push((PathBuf::from(v), 2));
@@ -482,7 +883,6 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
                         continue;
                     }
                 }
-                // Check one level deeper for Publisher\AppName folders (e.g. AppData\Local\Google\Chrome)
                 if *max_depth >= 2 && path.is_dir() {
                     if let Ok(sub_entries) = fs::read_dir(&path) {
                         for sub in sub_entries.flatten() {
@@ -515,14 +915,14 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
 
     for hit in fs_hits {
         let lower = hit.path.to_lowercase();
-        // Skip if parent folder is already listed
-        let covered = seen_paths.iter().any(|p| lower == *p || lower.starts_with(&format!("{p}\\")));
+        let covered = seen_paths
+            .iter()
+            .any(|p| lower == *p || lower.starts_with(&format!("{p}\\")));
         if !covered && seen_paths.insert(lower) {
             traces.push(hit);
         }
     }
 
-    // 3. Shortcuts (Start Menu & Desktop)
     let mut shortcut_dirs = Vec::new();
     if let Ok(v) = std::env::var("APPDATA") {
         shortcut_dirs.push(PathBuf::from(v).join(r"Microsoft\Windows\Start Menu\Programs"));
@@ -562,7 +962,6 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
         }
     }
 
-    // 4. Registry Leftovers (HKCU\Software, HKLM\SOFTWARE, WOW6432Node, orphaned Uninstall key)
     let reg_roots: &[(RegRoot, &str)] = &[
         (RegRoot::Hkcu, "Software"),
         (RegRoot::Hklm, "SOFTWARE"),
@@ -590,7 +989,6 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
                     });
                 }
             } else if let Ok(child) = parent.open_subkey_with_flags(&sub_name, KEY_READ) {
-                // Check Publisher\AppName subkey level
                 for grand in child.enum_keys().flatten() {
                     if let Some(conf) = match_name(&grand, &tokens) {
                         let full_sub = format!("{base}\\{sub_name}\\{grand}");
@@ -612,12 +1010,7 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
         }
     }
 
-    // Check if original Uninstall registry entry is still orphaned after uninstall
-    let orig_hive = RegKey::predef(app.reg_root.hkey());
-    if orig_hive
-        .open_subkey_with_flags(&app.reg_subkey, KEY_READ)
-        .is_ok()
-    {
+    if uninstall_key_still_exists(app) {
         let display = format!("{}\\{}", app.reg_root.as_str(), app.reg_subkey);
         if seen_paths.insert(display.to_lowercase()) {
             traces.push(AppTrace {
@@ -632,12 +1025,11 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
         }
     }
 
-    // 5. Scheduled Tasks leftovers (C:\Windows\System32\Tasks)
     let tasks_dir = PathBuf::from(r"C:\Windows\System32\Tasks");
     if tasks_dir.exists() {
         for entry in WalkDir::new(&tasks_dir).max_depth(2).into_iter().flatten() {
             let p = entry.path();
-            if p.is_file() {
+            if entry.file_type().is_file() {
                 let name = entry.file_name().to_string_lossy();
                 if let Some(conf) = match_name(&name, &tokens) {
                     let lower = p.to_string_lossy().to_lowercase();
@@ -648,7 +1040,7 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
                             confidence: conf,
                             path: p.to_string_lossy().to_string(),
                             size_bytes: 0,
-                            selected: false, // Tasks unchecked by default for extra safety
+                            selected: false,
                             reg_root: None,
                         });
                     }
@@ -657,7 +1049,6 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
         }
     }
 
-    // 6. Services pointing into the app's install location
     if !app.install_location.is_empty() {
         let loc_lower = app.install_location.to_lowercase();
         let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
@@ -686,7 +1077,6 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
         }
     }
 
-    // Sort High confidence first, then by size descending
     traces.sort_by(|a, b| {
         let ca = if a.confidence == TraceConfidence::High { 0 } else { 1 };
         let cb = if b.confidence == TraceConfidence::High { 0 } else { 1 };
@@ -702,7 +1092,6 @@ pub fn deep_scan_traces(app: &InstalledApp) -> Vec<AppTrace> {
 fn is_safe_install_dir(path: &Path) -> bool {
     let s = path.to_string_lossy().to_lowercase();
     let trimmed = s.trim_end_matches('\\');
-    // Never allow deleting root drives or top-level OS/user directories
     if trimmed.len() <= 3 {
         return false;
     }
@@ -723,7 +1112,6 @@ fn is_safe_install_dir(path: &Path) -> bool {
     true
 }
 
-/// Safely removes all selected leftover traces (files, folders, shortcuts, registry keys, tasks).
 pub fn delete_selected_traces(traces: &[AppTrace]) -> TraceDeleteReport {
     let mut report = TraceDeleteReport::default();
 
@@ -785,6 +1173,14 @@ mod tests {
     }
 
     #[test]
+    fn critical_system_processes_are_strictly_protected() {
+        assert!(is_critical_system_process("explorer.exe", r"c:\windows\explorer.exe"));
+        assert!(is_critical_system_process("svchost.exe", r"c:\windows\system32\svchost.exe"));
+        assert!(is_critical_system_process("reforge.exe", r"c:\tools\reforge.exe"));
+        assert!(!is_critical_system_process("discord.exe", r"c:\users\u\appdata\local\discord\discord.exe"));
+    }
+
+    #[test]
     fn safe_install_dir_blocks_os_roots() {
         assert!(!is_safe_install_dir(Path::new(r"C:\")));
         assert!(!is_safe_install_dir(Path::new(r"C:\Windows")));
@@ -805,4 +1201,3 @@ mod tests {
         assert!(!apps.is_empty(), "Expected installed Windows apps in registry");
     }
 }
-

@@ -1,14 +1,31 @@
 use crate::app::{App, Message};
+use crate::core::cleaner::CleanCategoryId;
 use crate::core::winapi::format_bytes;
 use crate::i18n::{tr, Lang};
 use crate::ui::components::{
-    h_divider, page_header, primary_button, secondary_button, stat_card, tag_pill,
+    checkbox_box, h_divider, inset_group, page_header, primary_button, secondary_button,
 };
 use crate::ui::icons;
+use crate::ui::motion::{self, StorageSegment};
 use crate::ui::theme::{self, Palette, FONT_MEDIUM, FONT_REGULAR, FONT_SEMIBOLD};
-use iced::alignment::Vertical;
+use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Color, Element, Length, Padding};
+
+fn category_color(id: CleanCategoryId, p: Palette) -> Color {
+    match id {
+        CleanCategoryId::UserTemp => p.accent,
+        CleanCategoryId::WindowsTemp => Color::from_rgb(0.35, 0.70, 0.98),
+        CleanCategoryId::BrowserCaches => Color::from_rgb(0.95, 0.58, 0.22),
+        CleanCategoryId::GpuShaderCaches => Color::from_rgb(0.32, 0.78, 0.52),
+        CleanCategoryId::WindowsLogsAndDumps => Color::from_rgb(0.88, 0.42, 0.42),
+        CleanCategoryId::WindowsUpdateCache => Color::from_rgb(0.62, 0.54, 0.94),
+        CleanCategoryId::AppCaches => Color::from_rgb(0.24, 0.75, 0.78),
+        CleanCategoryId::ExplorerCaches => Color::from_rgb(0.85, 0.68, 0.26),
+        CleanCategoryId::RecycleBin => Color::from_rgb(0.56, 0.60, 0.68),
+        CleanCategoryId::PrefetchAndDns => Color::from_rgb(0.75, 0.52, 0.72),
+    }
+}
 
 pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     let s = tr(app.config.lang);
@@ -20,8 +37,8 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         .map(|c| c.size_bytes)
         .sum();
     let any_selected = app.clean_scan.categories.iter().any(|c| c.selected);
+    let can_clean = any_selected && !app.cleaner_cleaning && !app.cleaner_scanning;
 
-    let clean_enabled = any_selected && !app.cleaner_cleaning && !app.cleaner_scanning;
     let actions = row![
         secondary_button(
             p,
@@ -30,7 +47,11 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             } else {
                 s.scan_junk.into()
             },
-            Some(icons::refresh(14.0, p.text_secondary).into()),
+            if app.cleaner_scanning {
+                Some(motion::spinner(app.motion.spinner_phase, 13.0, p.accent, p.hairline))
+            } else {
+                Some(icons::refresh(13.0, p.text_secondary).into())
+            },
             if app.cleaner_scanning || app.cleaner_cleaning {
                 None
             } else {
@@ -44,14 +65,18 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             } else {
                 format!("{} ({})", s.clean_selected, format_bytes(selected_bytes))
             },
-            Some(
-                icons::cleaner(
-                    14.0,
-                    if clean_enabled { Color::WHITE } else { p.text_muted },
+            if app.cleaner_cleaning {
+                Some(motion::spinner(app.motion.spinner_phase, 13.0, Color::WHITE, p.hairline))
+            } else {
+                Some(
+                    icons::cleaner(
+                        13.0,
+                        if can_clean { Color::WHITE } else { p.text_muted },
+                    )
+                    .into(),
                 )
-                .into(),
-            ),
-            if clean_enabled {
+            },
+            if can_clean {
                 Some(Message::CleanSelectedJunk)
             } else {
                 None
@@ -63,154 +88,157 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
 
     let header = page_header(p, s.cleaner_title, s.cleaner_sub, actions.into());
 
-    let stats = container(
-        row![
-            stat_card(
-                p,
-                s.reclaimable_space,
-                format_bytes(app.clean_scan.total_bytes),
-                p.accent,
-            ),
-            stat_card(
-                p,
-                s.files_detected,
-                app.clean_scan.total_files.to_string(),
-                p.text_primary,
-            ),
-            stat_card(
-                p,
-                s.scan_time,
-                format!("{} ms", app.clean_scan.elapsed_ms),
-                p.success,
-            ),
-        ]
-        .spacing(12),
-    )
-    .padding(Padding {
-        top: 0.0,
-        right: 26.0,
-        bottom: 14.0,
-        left: 26.0,
-    });
+    // macOS Storage / CleanMyMac unified summary strip with proportional breakdown bar
+    let segments: Vec<StorageSegment> = app
+        .clean_scan
+        .categories
+        .iter()
+        .map(|c| StorageSegment {
+            bytes: c.size_bytes,
+            color: category_color(c.id, p),
+        })
+        .collect();
 
-    let mut body = column![].spacing(8).padding(Padding {
-        top: 14.0,
-        right: 26.0,
-        bottom: 24.0,
-        left: 26.0,
-    });
-
-    if let Some(res) = &app.last_clean_exec {
-        let banner = container(
+    let summary_inner = {
+        let mut col = column![
             row![
-                icons::check(15.0, p.success),
+                text(format_bytes(app.clean_scan.total_bytes))
+                    .font(FONT_SEMIBOLD)
+                    .size(22)
+                    .color(p.text_primary),
                 text(format!(
-                    "Cleaned {} across {} files in {} ms  ({} locked files skipped safely)",
-                    format_bytes(res.freed_bytes),
-                    res.deleted_files,
-                    res.elapsed_ms,
-                    res.skipped_files
+                    "{}  ·  {} {}  ·  {} ms",
+                    s.reclaimable,
+                    app.clean_scan.total_files,
+                    s.files,
+                    app.clean_scan.elapsed_ms
                 ))
-                .font(FONT_MEDIUM)
-                .size(12)
-                .color(p.success),
+                .font(FONT_REGULAR)
+                .size(12.5)
+                .color(p.text_secondary),
+                Space::new().width(Length::Fill),
+                if app.cleaner_scanning {
+                    motion::spinner(app.motion.spinner_phase, 15.0, p.accent, p.hairline)
+                } else {
+                    Space::new().into()
+                },
+            ]
+            .spacing(10)
+            .align_y(Vertical::Center),
+            motion::storage_breakdown_bar(segments, app.clean_scan.total_bytes, p.hairline),
+        ]
+        .spacing(12);
+
+        if let Some(res) = &app.last_clean_exec {
+            col = col.push(
+                row![
+                    icons::check(13.0, p.success),
+                    text(format!(
+                        "Freed {} across {} files in {} ms ({} locked skipped)",
+                        format_bytes(res.freed_bytes),
+                        res.deleted_files,
+                        res.elapsed_ms,
+                        res.skipped_files
+                    ))
+                    .font(FONT_MEDIUM)
+                    .size(12)
+                    .color(p.success),
+                ]
+                .spacing(6)
+                .align_y(Vertical::Center),
+            );
+        }
+
+        container(col).padding([16, 18])
+    };
+
+    let summary_box = container(summary_inner)
+        .width(Length::Fill)
+        .style(theme::inset_group_style(p));
+
+    // Unified hairline inset list — ZERO stacked blue boxes!
+    let rows: Vec<Element<'a, Message>> = app
+        .clean_scan
+        .categories
+        .iter()
+        .map(|cat| {
+            let (name, desc) = match app.config.lang {
+                Lang::En => (cat.name_en, cat.desc_en),
+                Lang::PtBr => (cat.name_pt, cat.desc_pt),
+            };
+            let dot_color = category_color(cat.id, p);
+
+            let mut title_row = row![
+                container(Space::new())
+                    .width(Length::Fixed(8.0))
+                    .height(Length::Fixed(8.0))
+                    .style(theme::dot_style(dot_color)),
+                text(name)
+                    .font(FONT_MEDIUM)
+                    .size(13)
+                    .color(p.text_primary),
             ]
             .spacing(8)
-            .align_y(Vertical::Center),
-        )
-        .width(Length::Fill)
-        .padding([10, 14])
-        .style(theme::badge_style(
-            p.success_soft,
-            p.success,
-            Color::TRANSPARENT,
-        ));
-        body = body.push(banner);
-    }
+            .align_y(Vertical::Center);
 
-    for cat in &app.clean_scan.categories {
-        let (name, desc) = match app.config.lang {
-            Lang::En => (cat.name_en, cat.desc_en),
-            Lang::PtBr => (cat.name_pt, cat.desc_pt),
-        };
+            if cat.requires_admin && !app.sys_info.is_admin {
+                title_row = title_row.push(icons::lock(11.5, p.text_muted));
+            }
 
-        let mut tags = row![].spacing(6).align_y(Vertical::Center);
-        if cat.safe_default {
-            tags = tags.push(tag_pill(s.safe_tag, p.success_soft, p.success));
-        } else {
-            tags = tags.push(tag_pill(s.optional_tag, p.warning_soft, p.warning));
-        }
-        if cat.requires_admin {
-            tags = tags.push(tag_pill(s.admin_tag, p.bg_input, p.text_muted));
-        }
-
-        let card = button(
-            row![
-                container(if cat.selected {
-                    Element::from(icons::check(10.0, Color::WHITE))
-                } else {
-                    Space::new()
-                        .width(Length::Fixed(10.0))
-                        .height(Length::Fixed(10.0))
-                        .into()
-                })
-                .padding(3)
-                .style(theme::badge_style(
-                    if cat.selected { p.accent } else { p.bg_input },
-                    Color::WHITE,
-                    if cat.selected { p.accent } else { p.border },
-                )),
-                column![
-                    row![
-                        icons::database(13.0, if cat.selected { p.accent } else { p.text_muted }),
-                        text(name)
-                            .font(FONT_SEMIBOLD)
-                            .size(13)
-                            .color(p.text_primary),
-                        tags,
+            button(
+                row![
+                    checkbox_box(cat.selected, p),
+                    column![
+                        title_row,
+                        text(desc)
+                            .font(FONT_REGULAR)
+                            .size(12)
+                            .color(p.text_secondary),
                     ]
-                    .spacing(7)
-                    .align_y(Vertical::Center),
-                    text(desc)
-                        .font(FONT_REGULAR)
-                        .size(12)
-                        .color(p.text_secondary),
+                    .spacing(2)
+                    .width(Length::Fill),
+                    column![
+                        text(format_bytes(cat.size_bytes))
+                            .font(FONT_SEMIBOLD)
+                            .size(12.5)
+                            .color(if cat.size_bytes > 0 {
+                                p.text_primary
+                            } else {
+                                p.text_muted
+                            }),
+                        text(format!("{} {}", cat.file_count, s.files))
+                            .font(FONT_REGULAR)
+                            .size(11)
+                            .color(p.text_muted),
+                    ]
+                    .spacing(1)
+                    .align_x(Horizontal::Right),
                 ]
-                .spacing(3)
-                .width(Length::Fill),
-                column![
-                    text(format_bytes(cat.size_bytes))
-                        .font(FONT_SEMIBOLD)
-                        .size(13)
-                        .color(if cat.size_bytes > 0 {
-                            p.text_primary
-                        } else {
-                            p.text_muted
-                        }),
-                    text(format!("{} files", cat.file_count))
-                        .font(FONT_REGULAR)
-                        .size(11)
-                        .color(p.text_muted),
-                ]
-                .spacing(2)
-                .align_x(iced::alignment::Horizontal::Right),
-            ]
-            .spacing(12)
-            .align_y(Vertical::Center),
-        )
-        .width(Length::Fill)
-        .padding([12, 14])
-        .style(theme::btn_card_selectable(p, cat.selected))
-        .on_press(Message::ToggleCleanCategory(cat.id));
+                .spacing(12)
+                .align_y(Vertical::Center),
+            )
+            .width(Length::Fill)
+            .padding([11, 16])
+            .style(theme::btn_list_row(p, false))
+            .on_press(Message::ToggleCleanCategory(cat.id))
+            .into()
+        })
+        .collect();
 
-        body = body.push(card);
-    }
+    let body = column![summary_box, inset_group(p, rows)]
+        .spacing(14)
+        .padding(Padding {
+            top: 14.0 + app.motion.tab_offset_y(),
+            right: 24.0,
+            bottom: 24.0,
+            left: 24.0,
+        });
 
     let scroll = scrollable(body)
         .height(Length::Fill)
         .style(theme::scrollable_style(p));
 
-    column![header, stats, h_divider(p), scroll]
+    column![header, h_divider(p), scroll]
         .height(Length::Fill)
         .into()
 }

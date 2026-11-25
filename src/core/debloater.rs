@@ -7,6 +7,7 @@ pub enum BloatSafety {
     Moderate,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BloatPackage {
     pub package_name: String,

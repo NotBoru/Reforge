@@ -1,7 +1,7 @@
 use crate::app::{App, Message};
 use crate::i18n::tr;
 use crate::ui::components::{
-    empty_state, h_divider, page_header, search_bar, secondary_button, tag_pill,
+    app_logo, empty_state, h_divider, inset_group, page_header, search_bar, secondary_button,
 };
 use crate::ui::icons;
 use crate::ui::theme::{self, Palette, FONT_MEDIUM, FONT_REGULAR, FONT_SEMIBOLD};
@@ -12,15 +12,14 @@ use iced::{Element, Length, Padding};
 pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     let s = tr(app.config.lang);
 
-    let actions = row![secondary_button(
+    let actions = secondary_button(
         p,
         s.refresh.into(),
-        Some(icons::refresh(14.0, p.text_secondary).into()),
+        Some(icons::refresh(13.0, p.text_secondary).into()),
         Some(Message::RefreshStartupItems),
-    )]
-    .spacing(8);
+    );
 
-    let header = page_header(p, s.startup_title, s.startup_sub, actions.into());
+    let header = page_header(p, s.startup_title, s.startup_sub, actions);
 
     let q = app.startup_search.trim().to_lowercase();
     let filtered: Vec<_> = app
@@ -44,27 +43,30 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 Message::StartupSearchChanged,
                 Message::StartupSearchChanged(String::new()),
             ),
-            tag_pill(
-                format!("{enabled_count} / {} {}", app.startup_items.len(), s.enabled),
-                p.bg_surface,
-                p.text_secondary,
-            ),
+            text(format!(
+                "{enabled_count} / {} {}",
+                app.startup_items.len(),
+                s.enabled.to_lowercase()
+            ))
+            .font(FONT_REGULAR)
+            .size(12)
+            .color(p.text_muted),
         ]
         .spacing(12)
         .align_y(Vertical::Center),
     )
     .padding(Padding {
         top: 0.0,
-        right: 26.0,
-        bottom: 14.0,
-        left: 26.0,
+        right: 24.0,
+        bottom: 12.0,
+        left: 24.0,
     });
 
-    let mut body = column![].spacing(7).padding(Padding {
-        top: 14.0,
-        right: 26.0,
+    let mut body = column![].spacing(10).padding(Padding {
+        top: 12.0 + app.motion.tab_offset_y(),
+        right: 24.0,
         bottom: 24.0,
-        left: 26.0,
+        left: 24.0,
     });
 
     if filtered.is_empty() {
@@ -75,67 +77,62 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             "",
         ));
     } else {
-        for item in filtered {
-            let cmd_display: String = if item.command.chars().count() > 84 {
-                format!("{}...", item.command.chars().take(84).collect::<String>())
-            } else {
-                item.command.clone()
-            };
+        let rows: Vec<Element<'a, Message>> = filtered
+            .into_iter()
+            .map(|item| {
+                let cmd_short: String = if item.command.chars().count() > 76 {
+                    format!("{}...", item.command.chars().take(76).collect::<String>())
+                } else {
+                    item.command.clone()
+                };
 
-            let mut badges = row![tag_pill(
-                item.source.label(),
-                p.bg_input,
-                p.text_secondary
-            )]
-            .spacing(6);
-            if item.source.needs_admin() {
-                badges = badges.push(tag_pill(s.admin_tag, p.warning_soft, p.warning));
-            }
+                let mut name_row = row![text(&item.name)
+                    .font(FONT_SEMIBOLD)
+                    .size(13)
+                    .color(p.text_primary)]
+                .spacing(6)
+                .align_y(Vertical::Center);
+                if item.source.needs_admin() && !app.sys_info.is_admin {
+                    name_row = name_row.push(icons::lock(11.5, p.text_muted));
+                }
 
-            let card = container(
-                row![
-                    column![
-                        row![
-                            text(&item.name)
-                                .font(FONT_SEMIBOLD)
-                                .size(13)
-                                .color(p.text_primary),
-                            badges,
+                container(
+                    row![
+                        app_logo(app.startup_icon(&item.id), &item.name, 26.0, p),
+                        column![
+                            name_row,
+                            text(cmd_short)
+                                .font(FONT_REGULAR)
+                                .size(11.5)
+                                .color(p.text_muted),
                         ]
-                        .spacing(8)
-                        .align_y(Vertical::Center),
-                        text(cmd_display)
-                            .font(FONT_REGULAR)
-                            .size(11)
+                        .spacing(1)
+                        .width(Length::Fill),
+                        text(item.source.label())
+                            .font(FONT_MEDIUM)
+                            .size(11.5)
                             .color(p.text_muted),
+                        toggler(item.enabled)
+                            .size(19)
+                            .style(theme::toggler_style(p))
+                            .on_toggle({
+                                let id = item.id.clone();
+                                move |val| Message::ToggleStartupItem(id.clone(), val)
+                            }),
+                        button(icons::trash(13.5, p.text_muted))
+                            .padding([6, 7])
+                            .style(theme::btn_ghost(p))
+                            .on_press(Message::DeleteStartupItem(item.id.clone())),
                     ]
-                    .spacing(3)
-                    .width(Length::Fill),
-                    text(if item.enabled { s.enabled } else { s.disabled })
-                        .font(FONT_MEDIUM)
-                        .size(11)
-                        .color(if item.enabled { p.success } else { p.text_muted }),
-                    toggler(item.enabled)
-                        .size(20)
-                        .style(theme::toggler_style(p))
-                        .on_toggle({
-                            let id = item.id.clone();
-                            move |val| Message::ToggleStartupItem(id.clone(), val)
-                        }),
-                    button(icons::trash(14.0, p.text_muted))
-                        .padding([6, 8])
-                        .style(theme::btn_ghost(p))
-                        .on_press(Message::DeleteStartupItem(item.id.clone())),
-                ]
-                .spacing(12)
-                .align_y(Vertical::Center),
-            )
-            .width(Length::Fill)
-            .padding([11, 14])
-            .style(theme::card_style(p));
+                    .spacing(12)
+                    .align_y(Vertical::Center),
+                )
+                .padding([10, 14])
+                .into()
+            })
+            .collect();
 
-            body = body.push(card);
-        }
+        body = body.push(inset_group(p, rows));
     }
 
     let scroll = scrollable(body)

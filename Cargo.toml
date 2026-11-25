@@ -11,7 +11,8 @@ categories = ["os::windows-apis", "command-line-utilities"]
 build = "build.rs"
 
 [dependencies]
-iced = { version = "0.14.0", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "svg", "tokio", "advanced", "canvas"] }
+iced = { version = "0.14.0", default-features = false, features = ["wgpu", "tiny-skia", "crisp", "svg", "image-without-codecs", "tokio", "advanced", "canvas"] }
+image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "webp"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["native-tls", "charset", "http2", "system-proxy", "json", "stream", "gzip"] }
 futures-util = "0.3"
@@ -24,14 +25,18 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_Dns",
+    "Win32_Security",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
-    "Win32_Graphics_Dwm",
-    "Win32_Security",
-    "Win32_System_Threading",
-    "Win32_System_SystemInformation",
-    "Win32_Storage_FileSystem",
-    "Win32_NetworkManagement_Dns",
 ] }
 
 [build-dependencies]

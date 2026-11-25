@@ -1,27 +1,32 @@
 use crate::config::{self, PortableConfig, ReforgeProfile};
+use crate::core::app_icons::{self, RgbaIcon};
 use crate::core::catalog::{catalog, preset_app_ids, AppCategory, CatalogApp, PresetKind};
-use crate::core::cleaner::{
-    self, CleanCategoryId, CleanExecResult, CleanScanResult,
-};
+use crate::core::cleaner::{self, CleanCategoryId, CleanExecResult, CleanScanResult};
 use crate::core::debloater::{self, BloatPackage, BloatSafety};
 use crate::core::installer::{
     self, InstallEvent, InstallJob, InstallStage, WingetSearchResult,
 };
 use crate::core::startup::{self, StartupItem};
 use crate::core::tweaks::{self, SystemTweak, TweakCategory, TweakId};
-use crate::core::uninstaller::{self, AppTrace, InstalledApp, TraceConfidence, TraceDeleteReport};
+use crate::core::uninstaller::{
+    self, AppTrace, InstalledApp, TraceConfidence, TraceDeleteReport, UninstallOptions,
+    UninstallProgressEvent, UninstallStage,
+};
 use crate::core::updater::{self, AppUpdate, UpdateItemStatus, UpdateProgressEvent};
 use crate::core::winapi::{self, SystemInfo};
 use crate::i18n::Lang;
 use crate::ui::icons;
+use crate::ui::motion::MotionState;
 use crate::ui::theme::{self, ThemeMode, FONT_MEDIUM};
 use crate::ui::views;
 use iced::alignment::Vertical;
+use iced::widget::image::Handle as ImageHandle;
 use iced::widget::{button, column, container, row, stack, text, Space};
-use iced::{Element, Length, Padding, Subscription, Task, Theme};
+use iced::{window, Element, Length, Padding, Subscription, Task, Theme};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,11 +41,64 @@ pub enum Tab {
     Settings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallerFilter {
+    All,
+    NotInstalled,
+    Installed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallerSort {
+    Featured,
+    Name,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UninstallerSort {
+    Name,
+    Size,
+    Date,
+}
+
 #[derive(Debug, Clone)]
 pub struct InstallTaskState {
     pub app_id: String,
     pub app_name: String,
     pub stage: InstallStage,
+}
+
+#[derive(Debug, Clone)]
+pub struct UninstallTaskState {
+    pub app_id: String,
+    pub app_name: String,
+    pub stage: UninstallStage,
+}
+
+#[derive(Debug, Clone)]
+pub enum ActiveModal {
+    ConfirmUninstall {
+        apps: Vec<InstalledApp>,
+        close_processes: bool,
+        force_hung: bool,
+        scan_traces_after: bool,
+        prefer_quiet: bool,
+    },
+    UninstallProgress {
+        items: Vec<UninstallTaskState>,
+        finished: bool,
+        scan_traces_after: bool,
+    },
+    AppDetailsInstalled(InstalledApp),
+    AppDetailsCatalog(&'static CatalogApp),
+    ConfirmTweaks {
+        apply_recommended: bool,
+        affected_count: usize,
+        create_restore_point: bool,
+    },
+    ConfirmDebloat {
+        packages: Vec<BloatPackage>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +128,20 @@ pub enum Message {
     OpenPath(String),
     OpenUrl(String),
     PollStreams,
+    AnimationTick(Instant),
+
+    // Modals
+    CloseModal,
+    ModalToggleCloseProcs(bool),
+    ModalToggleForceHung(bool),
+    ModalToggleScanTracesAfter(bool),
+    ModalToggleQuietUninstall(bool),
+    ModalToggleRestorePoint(bool),
+
+    // Real App Icons
+    InstalledIconsLoaded(HashMap<String, RgbaIcon>),
+    CatalogIconsStreamDone,
+    StartupIconsLoaded(HashMap<String, RgbaIcon>),
 
     // System
     RefreshSystemInfo,
@@ -82,7 +154,10 @@ pub enum Message {
     // Installer
     InstallerSearchChanged(String),
     InstallerCategoryChanged(AppCategory),
+    InstallerFilterChanged(InstallerFilter),
+    InstallerSortChanged(InstallerSort),
     ToggleCatalogApp(&'static str),
+    OpenCatalogDetails(&'static CatalogApp),
     ApplyInstallPreset(PresetKind),
     ClearInstallSelection,
     SearchWingetCatalog,
@@ -90,6 +165,7 @@ pub enum Message {
     ClearWingetResults,
     ToggleWingetApp(String, String),
     StartInstallBatch,
+    CancelInstallBatch,
     InstallBatchDone,
     ClearInstallQueue,
 
@@ -97,11 +173,18 @@ pub enum Message {
     RefreshInstalledApps,
     InstalledAppsLoaded(Vec<InstalledApp>),
     UninstallerSearchChanged(String),
+    UninstallerSortChanged(UninstallerSort),
     ToggleSystemApps(bool),
-    UninstallApp(InstalledApp),
-    UninstallFinished(InstalledApp, Result<(), String>),
+    ToggleUninstallSelection(String),
+    ClearUninstallSelection,
+    OpenInstalledDetails(InstalledApp),
+    PromptBulkUninstall,
+    ConfirmBulkUninstall,
+    UninstallBatchDone,
+    ProceedToBatchTraceScan,
     ForceRemoveApp(InstalledApp),
-    DeepScanApp(InstalledApp),
+    DeepScanSelectedApps,
+    DeepScanApps(Vec<InstalledApp>),
     DeepScanFinished(Vec<AppTrace>),
     ToggleTrace(usize),
     ToggleAllTraces(bool),
@@ -116,6 +199,7 @@ pub enum Message {
     ToggleUpdateSelection(String),
     RunSelectedUpdates,
     RunSingleUpdate(String),
+    RetryFailedUpdates,
     UpdatesBatchDone,
 
     // Cleaner
@@ -130,7 +214,8 @@ pub enum Message {
     BloatwareScanned(Result<Vec<BloatPackage>, String>),
     ToggleBloatPackage(String),
     SelectSafeBloatOnly,
-    RemoveSelectedBloat,
+    PromptDebloatConfirm,
+    ExecuteConfirmedDebloat,
     BloatRemoved(usize, usize),
 
     // Startup
@@ -143,11 +228,11 @@ pub enum Message {
     // Tweaks
     TweakFilterChanged(Option<TweakCategory>),
     ToggleTweak(TweakId, bool),
-    ApplyRecommendedTweaks,
-    RestoreAllTweaks,
+    PromptTweaksConfirm(bool),
+    ExecuteConfirmedTweaks,
     TweaksReloaded(Vec<SystemTweak>),
 
-    // Settings / Portable
+    // Settings
     SetMaxConcurrency(usize),
     SetAutoCleanup(bool),
     SetPreferQuietUninstall(bool),
@@ -159,26 +244,42 @@ pub struct App {
     pub active_tab: Tab,
     pub config: PortableConfig,
     pub sys_info: SystemInfo,
+    pub motion: MotionState,
+    pub modal: Option<ActiveModal>,
     pub toast: Option<Toast>,
     pub winget_bootstrapping: bool,
+
+    // Real App Icon Handle Caches
+    installed_icons: HashMap<String, ImageHandle>,
+    catalog_icons: HashMap<String, ImageHandle>,
+    startup_icons: HashMap<String, ImageHandle>,
+    catalog_icons_streaming: bool,
+    catalog_icon_rx: Option<Arc<Mutex<mpsc::UnboundedReceiver<(String, RgbaIcon)>>>>,
 
     // Installer
     pub installer_search: String,
     pub installer_category: AppCategory,
+    pub installer_filter: InstallerFilter,
+    pub installer_sort: InstallerSort,
     pub selected_catalog_ids: HashSet<&'static str>,
     pub selected_winget_ids: HashMap<String, String>,
     pub winget_results: Vec<WingetSearchResult>,
     pub winget_searching: bool,
     pub install_queue: Vec<InstallTaskState>,
     pub installing_active: bool,
+    install_cancel: Option<Arc<AtomicBool>>,
     install_rx: Option<Arc<Mutex<mpsc::UnboundedReceiver<InstallEvent>>>>,
 
     // Uninstaller
     pub installed_apps: Vec<InstalledApp>,
     pub uninstaller_search: String,
+    pub uninstaller_sort: UninstallerSort,
     pub show_system_apps: bool,
-    pub uninstalling_id: Option<String>,
-    pub trace_target_app: Option<InstalledApp>,
+    pub selected_uninstall_ids: HashSet<String>,
+    pub uninstalling_active: bool,
+    last_uninstall_targets: Vec<InstalledApp>,
+    uninstall_rx: Option<Arc<Mutex<mpsc::UnboundedReceiver<UninstallProgressEvent>>>>,
+    pub trace_targets: Vec<InstalledApp>,
     pub detected_traces: Vec<AppTrace>,
     pub traces_scanning: bool,
 
@@ -208,14 +309,17 @@ pub struct App {
     // Tweaks
     pub tweaks: Vec<SystemTweak>,
     pub tweak_filter: Option<TweakCategory>,
+
+    // CLI visual preview hook
+    preview_modal_on_load: bool,
 }
 
 impl App {
     pub fn boot() -> (Self, Task<Message>) {
         let mut cfg = config::load_config();
         let mut initial_tab = Tab::Installer;
+        let mut preview_modal_on_load = false;
 
-        // Optional lightweight CLI flags (e.g., --tab=cleaner --theme=light --lang=pt)
         for arg in std::env::args().skip(1) {
             if let Some(t) = arg.strip_prefix("--tab=") {
                 initial_tab = match t.to_lowercase().as_str() {
@@ -240,31 +344,70 @@ impl App {
                     "pt" | "pt-br" => Lang::PtBr,
                     _ => Lang::En,
                 };
+            } else if arg == "--preview-uninstall-modal" {
+                initial_tab = Tab::Uninstaller;
+                preview_modal_on_load = true;
             }
         }
+
+        let reduced = winapi::is_reduced_motion_enabled();
+
+        let catalog_domains: Vec<(String, String)> = catalog()
+            .iter()
+            .map(|c| (c.id.to_string(), c.domain.to_string()))
+            .collect();
+
+        // Instant synchronous load of already-cached catalog icons (<5 ms on warm launches)
+        let (cached_raw, missing_domains) = app_icons::load_disk_cached_web_icons(&catalog_domains);
+        let mut catalog_icons: HashMap<String, ImageHandle> = HashMap::with_capacity(cached_raw.len());
+        for (k, rgba) in cached_raw {
+            catalog_icons.insert(k, rgba.into_handle());
+        }
+
+        let (icon_tx, icon_rx) = mpsc::unbounded_channel();
+        let streaming = !missing_domains.is_empty();
 
         let app = Self {
             active_tab: initial_tab,
             config: cfg,
             sys_info: SystemInfo::default(),
+            motion: MotionState::new(reduced),
+            modal: None,
             toast: None,
             winget_bootstrapping: false,
 
+            installed_icons: HashMap::new(),
+            catalog_icons,
+            startup_icons: HashMap::new(),
+            catalog_icons_streaming: streaming,
+            catalog_icon_rx: if streaming {
+                Some(Arc::new(Mutex::new(icon_rx)))
+            } else {
+                None
+            },
+
             installer_search: String::new(),
             installer_category: AppCategory::All,
+            installer_filter: InstallerFilter::All,
+            installer_sort: InstallerSort::Featured,
             selected_catalog_ids: HashSet::new(),
             selected_winget_ids: HashMap::new(),
             winget_results: Vec::new(),
             winget_searching: false,
             install_queue: Vec::new(),
             installing_active: false,
+            install_cancel: None,
             install_rx: None,
 
             installed_apps: Vec::new(),
             uninstaller_search: String::new(),
+            uninstaller_sort: UninstallerSort::Name,
             show_system_apps: false,
-            uninstalling_id: None,
-            trace_target_app: None,
+            selected_uninstall_ids: HashSet::new(),
+            uninstalling_active: false,
+            last_uninstall_targets: Vec::new(),
+            uninstall_rx: None,
+            trace_targets: Vec::new(),
             detected_traces: Vec::new(),
             traces_scanning: false,
 
@@ -289,9 +432,9 @@ impl App {
 
             tweaks: Vec::new(),
             tweak_filter: None,
+            preview_modal_on_load,
         };
 
-        // Fire all fast native scans in parallel on boot so every tab feels instantaneous!
         let mut tasks = vec![
             Task::perform(
                 tokio::task::spawn_blocking(winapi::collect_system_info),
@@ -321,6 +464,13 @@ impl App {
             ),
         ];
 
+        if streaming {
+            tasks.push(Task::perform(
+                app_icons::stream_missing_web_icons(missing_domains, icon_tx),
+                |_| Message::CatalogIconsStreamDone,
+            ));
+        }
+
         if initial_tab == Tab::Debloater {
             tasks.push(Task::done(Message::ScanBloatware));
         }
@@ -340,12 +490,90 @@ impl App {
         theme::iced_theme(self.config.theme)
     }
 
+    fn has_live_spinner(&self) -> bool {
+        self.installing_active
+            || self.uninstalling_active
+            || self.updates_checking
+            || self.updates_running
+            || self.cleaner_scanning
+            || self.cleaner_cleaning
+            || self.bloat_scanning
+            || self.bloat_removing
+            || self.traces_scanning
+            || self.winget_searching
+            || self.winget_bootstrapping
+    }
+
     pub fn subscription(&self) -> Subscription<Message> {
-        if self.installing_active || self.updates_running {
-            iced::time::every(Duration::from_millis(75)).map(|_| Message::PollStreams)
-        } else {
-            Subscription::none()
+        let mut subs = Vec::new();
+        if self.installing_active
+            || self.updates_running
+            || self.uninstalling_active
+            || self.catalog_icons_streaming
+        {
+            subs.push(iced::time::every(Duration::from_millis(65)).map(|_| Message::PollStreams));
         }
+        if self.motion.is_animating(self.has_live_spinner()) {
+            subs.push(window::frames().map(Message::AnimationTick));
+        }
+        if subs.is_empty() {
+            Subscription::none()
+        } else {
+            Subscription::batch(subs)
+        }
+    }
+
+    // ── REAL APP ICON LOOKUP HELPERS ─────────────────────────────────────────
+
+    pub fn installed_icon(&self, app_id: &str) -> Option<&ImageHandle> {
+        self.installed_icons.get(app_id)
+    }
+
+    pub fn startup_icon(&self, item_id: &str) -> Option<&ImageHandle> {
+        self.startup_icons.get(item_id)
+    }
+
+    /// Prefers locally extracted native Win32 logo when installed; falls back to cached vendor logo.
+    pub fn catalog_icon(&self, item: &CatalogApp) -> Option<&ImageHandle> {
+        if let Some(inst) = self.installed_apps.iter().find(|inst| {
+            let lower = inst.name.to_lowercase();
+            item.detect_keywords
+                .iter()
+                .any(|kw| lower.contains(&kw.to_lowercase()))
+        }) {
+            if let Some(h) = self.installed_icons.get(&inst.id) {
+                return Some(h);
+            }
+        }
+        self.catalog_icons.get(item.id)
+    }
+
+    pub fn winget_icon(&self, winget_id: &str) -> Option<&ImageHandle> {
+        if let Some(cat) = crate::core::catalog::find_by_winget_id(winget_id) {
+            return self.catalog_icon(cat);
+        }
+        None
+    }
+
+    pub fn update_icon(&self, upd: &AppUpdate) -> Option<&ImageHandle> {
+        if let Some(cid) = upd.catalog_id {
+            if let Some(cat) = catalog().iter().find(|c| c.id == cid) {
+                if let Some(h) = self.catalog_icon(cat) {
+                    return Some(h);
+                }
+            }
+        }
+        let ulow = upd.name.to_lowercase();
+        if let Some(inst) = self
+            .installed_apps
+            .iter()
+            .find(|i| i.name.to_lowercase().contains(&ulow) || ulow.contains(&i.name.to_lowercase()))
+        {
+            if let Some(h) = self.installed_icons.get(&inst.id) {
+                return Some(h);
+            }
+        }
+        None
     }
 
     pub fn is_catalog_app_installed(&self, app: &CatalogApp) -> bool {
@@ -357,6 +585,11 @@ impl App {
         })
     }
 
+    fn open_modal(&mut self, m: ActiveModal) {
+        self.modal = Some(m);
+        self.motion.trigger_modal_enter();
+    }
+
     fn set_toast(&mut self, msg: impl Into<String>, kind: ToastKind) {
         self.toast = Some(Toast {
             message: msg.into(),
@@ -366,12 +599,19 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            // ── NAVIGATION & GLOBAL ──────────────────────────────────────────
+            // ── NAVIGATION & MOTION ──────────────────────────────────────────
             Message::SelectTab(tab) => {
-                self.active_tab = tab;
+                if self.active_tab != tab {
+                    self.active_tab = tab;
+                    self.motion.trigger_tab_transition();
+                }
                 if tab == Tab::Debloater && !self.bloat_loaded_once && !self.bloat_scanning {
                     return Task::done(Message::ScanBloatware);
                 }
+                Task::none()
+            }
+            Message::AnimationTick(now) => {
+                self.motion.tick(now);
                 Task::none()
             }
             Message::CycleTheme => {
@@ -419,7 +659,84 @@ impl App {
                 winapi::open_url(&url);
                 Task::none()
             }
+
+            // ── MODALS ───────────────────────────────────────────────────────
+            Message::CloseModal => {
+                if !self.uninstalling_active {
+                    self.modal = None;
+                }
+                Task::none()
+            }
+            Message::ModalToggleCloseProcs(v) => {
+                if let Some(ActiveModal::ConfirmUninstall {
+                    close_processes, ..
+                }) = &mut self.modal
+                {
+                    *close_processes = v;
+                }
+                Task::none()
+            }
+            Message::ModalToggleForceHung(v) => {
+                if let Some(ActiveModal::ConfirmUninstall { force_hung, .. }) = &mut self.modal {
+                    *force_hung = v;
+                }
+                Task::none()
+            }
+            Message::ModalToggleScanTracesAfter(v) => {
+                if let Some(ActiveModal::ConfirmUninstall {
+                    scan_traces_after, ..
+                }) = &mut self.modal
+                {
+                    *scan_traces_after = v;
+                }
+                Task::none()
+            }
+            Message::ModalToggleQuietUninstall(v) => {
+                if let Some(ActiveModal::ConfirmUninstall { prefer_quiet, .. }) = &mut self.modal {
+                    *prefer_quiet = v;
+                }
+                Task::none()
+            }
+            Message::ModalToggleRestorePoint(v) => {
+                if let Some(ActiveModal::ConfirmTweaks {
+                    create_restore_point,
+                    ..
+                }) = &mut self.modal
+                {
+                    *create_restore_point = v;
+                }
+                Task::none()
+            }
+
+            // ── REAL APP ICONS ───────────────────────────────────────────────
+            Message::InstalledIconsLoaded(map) => {
+                for (k, rgba) in map {
+                    self.installed_icons.insert(k, rgba.into_handle());
+                }
+                Task::none()
+            }
+            Message::CatalogIconsStreamDone => {
+                let _ = self.update(Message::PollStreams);
+                self.catalog_icons_streaming = false;
+                self.catalog_icon_rx = None;
+                Task::none()
+            }
+            Message::StartupIconsLoaded(map) => {
+                for (k, rgba) in map {
+                    self.startup_icons.insert(k, rgba.into_handle());
+                }
+                Task::none()
+            }
+
+            // ── BACKGROUND STREAMS ───────────────────────────────────────────
             Message::PollStreams => {
+                if let Some(rx_arc) = &self.catalog_icon_rx {
+                    if let Ok(mut rx) = rx_arc.lock() {
+                        while let Ok((key, rgba)) = rx.try_recv() {
+                            self.catalog_icons.insert(key, rgba.into_handle());
+                        }
+                    }
+                }
                 if let Some(rx_arc) = &self.install_rx {
                     if let Ok(mut rx) = rx_arc.lock() {
                         while let Ok(ev) = rx.try_recv() {
@@ -448,6 +765,19 @@ impl App {
                         }
                     }
                 }
+                if let Some(rx_arc) = &self.uninstall_rx {
+                    if let Ok(mut rx) = rx_arc.lock() {
+                        while let Ok(ev) = rx.try_recv() {
+                            if let Some(ActiveModal::UninstallProgress { items, .. }) =
+                                &mut self.modal
+                            {
+                                if let Some(it) = items.iter_mut().find(|x| x.app_id == ev.app_id) {
+                                    it.stage = ev.stage;
+                                }
+                            }
+                        }
+                    }
+                }
                 Task::none()
             }
 
@@ -461,9 +791,9 @@ impl App {
                 Task::none()
             }
             Message::CreateRestorePoint => {
-                self.set_toast("Creating Windows System Restore Point...", ToastKind::Info);
+                self.set_toast("Creating System Restore Point...", ToastKind::Info);
                 Task::perform(
-                    winapi::create_restore_point("Reforge Pre-Optimization Backup"),
+                    winapi::create_restore_point("Reforge System Backup"),
                     Message::RestorePointFinished,
                 )
             }
@@ -476,7 +806,7 @@ impl App {
             }
             Message::BootstrapWinget => {
                 self.winget_bootstrapping = true;
-                self.set_toast("Downloading Winget (App Installer) from Microsoft GitHub...", ToastKind::Info);
+                self.set_toast("Downloading WinGet from official Microsoft release...", ToastKind::Info);
                 Task::perform(installer::bootstrap_winget(), Message::BootstrapWingetFinished)
             }
             Message::BootstrapWingetFinished(res) => {
@@ -500,10 +830,22 @@ impl App {
                 self.installer_category = cat;
                 Task::none()
             }
+            Message::InstallerFilterChanged(f) => {
+                self.installer_filter = f;
+                Task::none()
+            }
+            Message::InstallerSortChanged(s) => {
+                self.installer_sort = s;
+                Task::none()
+            }
             Message::ToggleCatalogApp(id) => {
                 if !self.selected_catalog_ids.remove(id) {
                     self.selected_catalog_ids.insert(id);
                 }
+                Task::none()
+            }
+            Message::OpenCatalogDetails(app) => {
+                self.open_modal(ActiveModal::AppDetailsCatalog(app));
                 Task::none()
             }
             Message::ApplyInstallPreset(preset) => {
@@ -533,7 +875,7 @@ impl App {
                 match res {
                     Ok(items) => {
                         if items.is_empty() {
-                            self.set_toast("No Winget packages matched that query.", ToastKind::Info);
+                            self.set_toast("No WinGet packages matched that query.", ToastKind::Info);
                         }
                         self.winget_results = items;
                     }
@@ -560,7 +902,6 @@ impl App {
                     .filter(|a| self.selected_catalog_ids.contains(a.id))
                     .map(InstallJob::from)
                     .collect();
-
                 for (wid, wname) in &self.selected_winget_ids {
                     jobs.push(InstallJob {
                         id: format!("wg_{wid}"),
@@ -569,7 +910,6 @@ impl App {
                         direct: None,
                     });
                 }
-
                 if jobs.is_empty() {
                     return Task::none();
                 }
@@ -586,34 +926,43 @@ impl App {
                 self.selected_winget_ids.clear();
                 self.installing_active = true;
 
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.install_cancel = Some(Arc::clone(&cancel));
                 let (tx, rx) = mpsc::unbounded_channel();
                 self.install_rx = Some(Arc::new(Mutex::new(rx)));
 
                 let conc = self.config.max_concurrent_installs;
                 let cleanup = self.config.auto_cleanup_downloads;
                 Task::perform(
-                    installer::run_install_batch(jobs, conc, cleanup, tx),
+                    installer::run_install_batch(jobs, conc, cleanup, cancel, tx),
                     |_| Message::InstallBatchDone,
                 )
             }
+            Message::CancelInstallBatch => {
+                if let Some(flag) = &self.install_cancel {
+                    flag.store(true, Ordering::Relaxed);
+                    self.set_toast("Cancelling remaining downloads...", ToastKind::Info);
+                }
+                Task::none()
+            }
             Message::InstallBatchDone => {
-                // Drain any final messages before clearing active state
                 let _ = self.update(Message::PollStreams);
                 self.installing_active = false;
                 self.install_rx = None;
-                let ok_count = self
+                self.install_cancel = None;
+                let ok = self
                     .install_queue
                     .iter()
                     .filter(|t| matches!(t.stage, InstallStage::Done { .. }))
                     .count();
-                let fail_count = self
+                let fail = self
                     .install_queue
                     .iter()
                     .filter(|t| matches!(t.stage, InstallStage::Failed(_)))
                     .count();
                 self.set_toast(
-                    format!("Install batch finished: {ok_count} installed, {fail_count} failed."),
-                    if fail_count == 0 {
+                    format!("Install batch finished: {ok} installed, {fail} failed."),
+                    if fail == 0 {
                         ToastKind::Success
                     } else {
                         ToastKind::Info
@@ -635,64 +984,196 @@ impl App {
                 )
             }
             Message::InstalledAppsLoaded(apps) => {
+                let icon_inputs: Vec<(String, String, String, String, String)> = apps
+                    .iter()
+                    .filter(|a| !self.installed_icons.contains_key(&a.id))
+                    .map(|a| {
+                        (
+                            a.id.clone(),
+                            a.name.clone(),
+                            a.display_icon.clone(),
+                            a.install_location.clone(),
+                            a.uninstall_string.clone(),
+                        )
+                    })
+                    .collect();
+
+                // Prune any selections for apps no longer installed
+                let valid_ids: HashSet<String> = apps.iter().map(|a| a.id.clone()).collect();
+                self.selected_uninstall_ids
+                    .retain(|id| valid_ids.contains(id));
+
                 self.installed_apps = apps;
-                Task::none()
+
+                if self.preview_modal_on_load && self.installed_apps.len() >= 3 {
+                    self.preview_modal_on_load = false;
+                    let sample: Vec<InstalledApp> =
+                        self.installed_apps.iter().take(3).cloned().collect();
+                    for a in &sample {
+                        self.selected_uninstall_ids.insert(a.id.clone());
+                    }
+                    self.open_modal(ActiveModal::ConfirmUninstall {
+                        apps: sample,
+                        close_processes: true,
+                        force_hung: false,
+                        scan_traces_after: true,
+                        prefer_quiet: self.config.prefer_quiet_uninstall,
+                    });
+                }
+
+                if icon_inputs.is_empty() {
+                    Task::none()
+                } else {
+                    Task::perform(
+                        tokio::task::spawn_blocking(move || {
+                            app_icons::extract_installed_icons_batch(&icon_inputs)
+                        }),
+                        |r| Message::InstalledIconsLoaded(r.unwrap_or_default()),
+                    )
+                }
             }
             Message::UninstallerSearchChanged(q) => {
                 self.uninstaller_search = q;
+                Task::none()
+            }
+            Message::UninstallerSortChanged(sort) => {
+                self.uninstaller_sort = sort;
                 Task::none()
             }
             Message::ToggleSystemApps(val) => {
                 self.show_system_apps = val;
                 Task::done(Message::RefreshInstalledApps)
             }
-            Message::UninstallApp(app) => {
-                self.uninstalling_id = Some(app.id.clone());
-                let quiet = self.config.prefer_quiet_uninstall;
+            Message::ToggleUninstallSelection(id) => {
+                if !self.selected_uninstall_ids.remove(&id) {
+                    self.selected_uninstall_ids.insert(id);
+                }
+                Task::none()
+            }
+            Message::ClearUninstallSelection => {
+                self.selected_uninstall_ids.clear();
+                Task::none()
+            }
+            Message::OpenInstalledDetails(app) => {
+                self.open_modal(ActiveModal::AppDetailsInstalled(app));
+                Task::none()
+            }
+            Message::PromptBulkUninstall => {
+                let selected: Vec<InstalledApp> = self
+                    .installed_apps
+                    .iter()
+                    .filter(|a| self.selected_uninstall_ids.contains(&a.id))
+                    .cloned()
+                    .collect();
+                if selected.is_empty() {
+                    return Task::none();
+                }
+                self.open_modal(ActiveModal::ConfirmUninstall {
+                    apps: selected,
+                    close_processes: true,
+                    force_hung: false,
+                    scan_traces_after: true,
+                    prefer_quiet: self.config.prefer_quiet_uninstall,
+                });
+                Task::none()
+            }
+            Message::ConfirmBulkUninstall => {
+                let Some(ActiveModal::ConfirmUninstall {
+                    apps,
+                    close_processes,
+                    force_hung,
+                    scan_traces_after,
+                    prefer_quiet,
+                }) = self.modal.take()
+                else {
+                    return Task::none();
+                };
+
+                let progress_items: Vec<UninstallTaskState> = apps
+                    .iter()
+                    .map(|a| UninstallTaskState {
+                        app_id: a.id.clone(),
+                        app_name: a.name.clone(),
+                        stage: UninstallStage::Queued,
+                    })
+                    .collect();
+
+                self.last_uninstall_targets = apps.clone();
+                self.uninstalling_active = true;
+                self.open_modal(ActiveModal::UninstallProgress {
+                    items: progress_items,
+                    finished: false,
+                    scan_traces_after,
+                });
+
+                let (tx, rx) = mpsc::unbounded_channel();
+                self.uninstall_rx = Some(Arc::new(Mutex::new(rx)));
+
+                let opts = UninstallOptions {
+                    close_processes,
+                    force_terminate_if_hung: force_hung,
+                    prefer_quiet,
+                };
+
                 Task::perform(
-                    async move {
-                        let res = uninstaller::run_native_uninstaller(&app, quiet).await;
-                        (app, res)
-                    },
-                    |(app, res)| Message::UninstallFinished(app, res),
+                    uninstaller::run_bulk_uninstall_lifecycle(apps, opts, tx),
+                    |_| Message::UninstallBatchDone,
                 )
             }
-            Message::UninstallFinished(app, res) => {
-                self.uninstalling_id = None;
-                match res {
-                    Ok(()) => self.set_toast(
-                        format!("{} uninstalled — scanning leftover traces...", app.name),
-                        ToastKind::Success,
-                    ),
-                    Err(e) => self.set_toast(e, ToastKind::Error),
+            Message::UninstallBatchDone => {
+                let _ = self.update(Message::PollStreams);
+                self.uninstalling_active = false;
+                self.uninstall_rx = None;
+                self.selected_uninstall_ids.clear();
+                if let Some(ActiveModal::UninstallProgress { finished, .. }) = &mut self.modal {
+                    *finished = true;
                 }
-                Task::batch([
-                    Task::done(Message::RefreshInstalledApps),
-                    Task::done(Message::DeepScanApp(app)),
-                ])
+                Task::done(Message::RefreshInstalledApps)
+            }
+            Message::ProceedToBatchTraceScan => {
+                self.modal = None;
+                let targets = self.last_uninstall_targets.clone();
+                Task::done(Message::DeepScanApps(targets))
             }
             Message::ForceRemoveApp(app) => {
+                self.modal = None;
                 match uninstaller::force_remove_uninstall_entry(&app) {
                     Ok(()) => {
                         self.set_toast(
-                            format!("Removed uninstall entry for {}. Scanning traces...", app.name),
+                            format!("Removed uninstall entry for {}.", app.name),
                             ToastKind::Success,
                         );
                         return Task::batch([
                             Task::done(Message::RefreshInstalledApps),
-                            Task::done(Message::DeepScanApp(app)),
+                            Task::done(Message::DeepScanApps(vec![app])),
                         ]);
                     }
                     Err(e) => self.set_toast(e, ToastKind::Error),
                 }
                 Task::none()
             }
-            Message::DeepScanApp(app) => {
-                self.trace_target_app = Some(app.clone());
+            Message::DeepScanSelectedApps => {
+                let selected: Vec<InstalledApp> = self
+                    .installed_apps
+                    .iter()
+                    .filter(|a| self.selected_uninstall_ids.contains(&a.id))
+                    .cloned()
+                    .collect();
+                if selected.is_empty() {
+                    return Task::none();
+                }
+                Task::done(Message::DeepScanApps(selected))
+            }
+            Message::DeepScanApps(apps) => {
+                self.modal = None;
+                if apps.is_empty() {
+                    return Task::none();
+                }
+                self.trace_targets = apps.clone();
                 self.detected_traces.clear();
                 self.traces_scanning = true;
                 Task::perform(
-                    tokio::task::spawn_blocking(move || uninstaller::deep_scan_traces(&app)),
+                    tokio::task::spawn_blocking(move || uninstaller::deep_scan_traces_multi(&apps)),
                     |r| Message::DeepScanFinished(r.unwrap_or_default()),
                 )
             }
@@ -729,7 +1210,7 @@ impl App {
             Message::TracesDeleted(report) => {
                 self.set_toast(
                     format!(
-                        "Removed {} leftover traces ({} freed, {} locked/failed).",
+                        "Removed {} traces ({} freed, {} skipped).",
                         report.deleted_count,
                         winapi::format_bytes(report.freed_bytes),
                         report.failed_count
@@ -740,16 +1221,14 @@ impl App {
                         ToastKind::Info
                     },
                 );
-                if let Some(target) = self.trace_target_app.clone() {
-                    return Task::batch([
-                        Task::done(Message::RefreshInstalledApps),
-                        Task::done(Message::DeepScanApp(target)),
-                    ]);
-                }
-                Task::none()
+                let targets = self.trace_targets.clone();
+                Task::batch([
+                    Task::done(Message::RefreshInstalledApps),
+                    Task::done(Message::DeepScanApps(targets)),
+                ])
             }
             Message::CloseTraceReview => {
-                self.trace_target_app = None;
+                self.trace_targets.clear();
                 self.detected_traces.clear();
                 Task::none()
             }
@@ -784,6 +1263,15 @@ impl App {
                 self.start_updates(ids)
             }
             Message::RunSingleUpdate(id) => self.start_updates(vec![id]),
+            Message::RetryFailedUpdates => {
+                let ids: Vec<String> = self
+                    .updates
+                    .iter()
+                    .filter(|u| matches!(u.status, UpdateItemStatus::Failed(_)))
+                    .map(|u| u.id.clone())
+                    .collect();
+                self.start_updates(ids)
+            }
             Message::UpdatesBatchDone => {
                 let _ = self.update(Message::PollStreams);
                 self.updates_running = false;
@@ -875,26 +1363,32 @@ impl App {
                 }
                 Task::none()
             }
-            Message::RemoveSelectedBloat => {
+            Message::PromptDebloatConfirm => {
                 let selected: Vec<BloatPackage> = self
                     .bloat_packages
                     .iter()
                     .filter(|b| b.selected)
                     .cloned()
                     .collect();
-                if selected.is_empty() {
-                    return Task::none();
+                if !selected.is_empty() {
+                    self.open_modal(ActiveModal::ConfirmDebloat { packages: selected });
                 }
+                Task::none()
+            }
+            Message::ExecuteConfirmedDebloat => {
+                let Some(ActiveModal::ConfirmDebloat { packages }) = self.modal.take() else {
+                    return Task::none();
+                };
                 self.bloat_removing = true;
                 Task::perform(
-                    debloater::remove_bloat_packages(selected),
+                    debloater::remove_bloat_packages(packages),
                     |(ok, fail)| Message::BloatRemoved(ok, fail),
                 )
             }
             Message::BloatRemoved(ok, fail) => {
                 self.bloat_removing = false;
                 self.set_toast(
-                    format!("Removed {ok} bloatware packages ({fail} failed)."),
+                    format!("Removed {ok} packages ({fail} failed)."),
                     if fail == 0 {
                         ToastKind::Success
                     } else {
@@ -910,8 +1404,22 @@ impl App {
                 |r| Message::StartupItemsLoaded(r.unwrap_or_default()),
             ),
             Message::StartupItemsLoaded(items) => {
+                let icon_inputs: Vec<(String, String)> = items
+                    .iter()
+                    .filter(|i| !self.startup_icons.contains_key(&i.id))
+                    .map(|i| (i.id.clone(), i.command.clone()))
+                    .collect();
                 self.startup_items = items;
-                Task::none()
+                if icon_inputs.is_empty() {
+                    Task::none()
+                } else {
+                    Task::perform(
+                        tokio::task::spawn_blocking(move || {
+                            app_icons::extract_startup_icons_batch(&icon_inputs)
+                        }),
+                        |r| Message::StartupIconsLoaded(r.unwrap_or_default()),
+                    )
+                }
             }
             Message::StartupSearchChanged(q) => {
                 self.startup_search = q;
@@ -949,62 +1457,99 @@ impl App {
                 Task::none()
             }
             Message::ToggleTweak(id, enable) => {
-                match tweaks::set_tweak(id, enable) {
-                    Ok(()) => {
+                match tweaks::set_tweak_verified(id, enable) {
+                    Ok(actual) => {
                         if let Some(t) = self.tweaks.iter_mut().find(|x| x.id == id) {
-                            t.enabled = enable;
+                            t.enabled = actual;
                         }
                     }
                     Err(e) => self.set_toast(e, ToastKind::Error),
                 }
                 Task::none()
             }
-            Message::ApplyRecommendedTweaks => {
+            Message::PromptTweaksConfirm(apply_recommended) => {
+                let count = if apply_recommended {
+                    self.tweaks
+                        .iter()
+                        .filter(|t| t.recommended && !t.enabled)
+                        .count()
+                } else {
+                    self.tweaks.iter().filter(|t| t.enabled).count()
+                };
+                if count == 0 {
+                    self.set_toast(
+                        if apply_recommended {
+                            "All recommended optimizations are already enabled."
+                        } else {
+                            "All optimizations are already at Windows defaults."
+                        },
+                        ToastKind::Info,
+                    );
+                    return Task::none();
+                }
+                self.open_modal(ActiveModal::ConfirmTweaks {
+                    apply_recommended,
+                    affected_count: count,
+                    create_restore_point: self.sys_info.is_admin,
+                });
+                Task::none()
+            }
+            Message::ExecuteConfirmedTweaks => {
+                let Some(ActiveModal::ConfirmTweaks {
+                    apply_recommended,
+                    create_restore_point,
+                    ..
+                }) = self.modal.take()
+                else {
+                    return Task::none();
+                };
+
                 let mut ok = 0;
                 let mut err = 0;
                 for t in &mut self.tweaks {
-                    if t.recommended && !t.enabled {
-                        match tweaks::set_tweak(t.id, true) {
-                            Ok(()) => {
-                                t.enabled = true;
+                    let should_change = if apply_recommended {
+                        t.recommended && !t.enabled
+                    } else {
+                        t.enabled
+                    };
+                    if should_change {
+                        match tweaks::set_tweak_verified(t.id, apply_recommended) {
+                            Ok(actual) => {
+                                t.enabled = actual;
                                 ok += 1;
                             }
                             Err(_) => err += 1,
                         }
                     }
                 }
+
                 self.set_toast(
-                    format!("Applied {ok} recommended tweaks ({err} required Admin)."),
+                    if apply_recommended {
+                        format!("Applied {ok} verified settings ({err} required Admin).")
+                    } else {
+                        format!("Restored {ok} settings to Windows defaults.")
+                    },
                     if err == 0 {
                         ToastKind::Success
                     } else {
                         ToastKind::Info
                     },
                 );
-                Task::none()
-            }
-            Message::RestoreAllTweaks => {
-                let mut ok = 0;
-                for t in &mut self.tweaks {
-                    if t.enabled && tweaks::set_tweak(t.id, false).is_ok() {
-                        t.enabled = false;
-                        ok += 1;
-                    }
+
+                if create_restore_point {
+                    Task::done(Message::CreateRestorePoint)
+                } else {
+                    Task::none()
                 }
-                self.set_toast(
-                    format!("Restored {ok} settings back to Windows defaults."),
-                    ToastKind::Success,
-                );
-                Task::none()
             }
             Message::TweaksReloaded(list) => {
                 self.tweaks = list;
                 Task::none()
             }
 
-            // ── SETTINGS / PORTABLE ──────────────────────────────────────────
+            // ── SETTINGS ─────────────────────────────────────────────────────
             Message::SetMaxConcurrency(n) => {
-                self.config.max_concurrent_installs = n.clamp(1, 8);
+                self.config.max_concurrent_installs = n.clamp(1, 6);
                 config::save_config(&self.config);
                 Task::none()
             }
@@ -1094,7 +1639,7 @@ impl App {
             Tab::Settings => views::settings::view(self, p),
         };
 
-        let shell = container(row![
+        let base = container(row![
             views::sidebar::view(self, p),
             container(content)
                 .width(Length::Fill)
@@ -1105,6 +1650,8 @@ impl App {
         .height(Length::Fill)
         .style(theme::canvas_style(p));
 
+        let mut layers: Vec<Element<'_, Message>> = vec![base.into()];
+
         if let Some(toast) = &self.toast {
             let accent = match toast.kind {
                 ToastKind::Info => p.accent,
@@ -1112,9 +1659,9 @@ impl App {
                 ToastKind::Error => p.danger,
             };
             let toast_ic: Element<'_, Message> = match toast.kind {
-                ToastKind::Success => icons::check(14.0, accent).into(),
-                ToastKind::Error => icons::alert_triangle(14.0, accent).into(),
-                ToastKind::Info => icons::sparkles(14.0, accent).into(),
+                ToastKind::Success => icons::check(13.0, accent).into(),
+                ToastKind::Error => icons::alert_triangle(13.0, accent).into(),
+                ToastKind::Info => icons::info(13.0, accent).into(),
             };
 
             let toast_bar = container(
@@ -1124,32 +1671,37 @@ impl App {
                         .font(FONT_MEDIUM)
                         .size(12)
                         .color(p.text_primary),
-                    button(icons::close(12.0, p.text_muted))
-                        .padding([3, 5])
+                    button(icons::close(11.0, p.text_muted))
+                        .padding([3, 4])
                         .style(theme::btn_ghost(p))
                         .on_press(Message::DismissToast),
                 ]
-                .spacing(10)
+                .spacing(9)
                 .align_y(Vertical::Center),
             )
-            .padding([10, 14])
+            .padding([9, 13])
             .style(theme::toast_style(p, accent));
 
-            let overlay = container(
-                column![
-                    Space::new().height(Length::Fill),
-                    row![Space::new().width(Length::Fill), toast_bar]
-                        .padding(Padding::from(18.0)),
-                ]
+            layers.push(
+                container(
+                    column![
+                        Space::new().height(Length::Fill),
+                        row![Space::new().width(Length::Fill), toast_bar]
+                            .padding(Padding::from(16.0)),
+                    ]
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                )
                 .width(Length::Fill)
-                .height(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(Length::Fill);
-
-            stack![shell, overlay].into()
-        } else {
-            shell.into()
+                .height(Length::Fill)
+                .into(),
+            );
         }
+
+        if let Some(modal) = &self.modal {
+            layers.push(views::modals::view(self, modal, p));
+        }
+
+        stack(layers).into()
     }
 }
