@@ -5,7 +5,6 @@ use iced::widget::image::{self, Handle as ImageHandle};
 use iced::widget::{button, column, container, mouse_area, row, text, text_input, Space};
 use iced::{Color, Element, Length, Padding};
 
-/// Clean Apple-style view header with concise title, optional single-line subtitle, and trailing CTA.
 pub fn page_header<'a, M: 'a>(
     p: Palette,
     title: &'a str,
@@ -42,7 +41,6 @@ pub fn page_header<'a, M: 'a>(
     .into()
 }
 
-/// Renders a real extracted/cached application logo, or a restrained monochrome monogram while loading.
 pub fn app_logo<'a, M: 'a>(
     handle: Option<&'a ImageHandle>,
     name: &str,
@@ -82,10 +80,9 @@ pub fn app_logo<'a, M: 'a>(
     }
 }
 
-/// Precision 16x16 macOS-style checkbox indicator.
 pub fn checkbox_box<'a, M: 'a>(checked: bool, p: Palette) -> Element<'a, M> {
     container(if checked {
-        Element::from(icons::check(10.0, Color::WHITE))
+        Element::from(icons::check(10.0, p.accent_fg))
     } else {
         Space::new()
             .width(Length::Fixed(10.0))
@@ -100,7 +97,6 @@ pub fn checkbox_box<'a, M: 'a>(checked: bool, p: Palette) -> Element<'a, M> {
     .into()
 }
 
-/// Quiet semantic status dot + optional crisp text (replaces noisy pill badges).
 pub fn status_dot<'a, M: 'a>(color: Color, label: Option<&'a str>, p: Palette) -> Element<'a, M> {
     let dot = container(Space::new())
         .width(Length::Fixed(6.0))
@@ -112,7 +108,7 @@ pub fn status_dot<'a, M: 'a>(color: Color, label: Option<&'a str>, p: Palette) -
             dot,
             text(lbl)
                 .font(FONT_MEDIUM)
-                .size(11)
+                .size(11.5)
                 .color(p.text_secondary),
         ]
         .spacing(6)
@@ -123,32 +119,47 @@ pub fn status_dot<'a, M: 'a>(color: Color, label: Option<&'a str>, p: Palette) -
     }
 }
 
-/// Stitches rows into a single macOS System Settings inset grouped surface with 1px hairline dividers.
-pub fn inset_group<'a, M: 'a>(p: Palette, rows: Vec<Element<'a, M>>) -> Element<'a, M> {
-    let mut col = column![];
-    let total = rows.len();
-    for (idx, item) in rows.into_iter().enumerate() {
-        col = col.push(item);
-        if idx + 1 < total {
-            col = col.push(
-                container(
-                    container(Space::new())
-                        .width(Length::Fill)
-                        .height(Length::Fixed(1.0))
-                        .style(theme::hairline_style(p)),
-                )
-                .padding([0, 14]),
-            );
-        }
+/// Clean borderless list stack (zero visible row separators, subtle 3px breathing rhythm).
+pub fn clean_list<'a, M: 'a>(rows: Vec<Element<'a, M>>) -> Element<'a, M> {
+    let mut col = column![].spacing(3).width(Length::Fill);
+    for r in rows {
+        col = col.push(r);
     }
+    col.into()
+}
 
+/// Subtle panel container with soft inner padding and zero hard horizontal row separators.
+pub fn soft_panel<'a, M: 'a>(p: Palette, rows: Vec<Element<'a, M>>) -> Element<'a, M> {
+    let mut col = column![].spacing(2).width(Length::Fill);
+    for item in rows {
+        col = col.push(item);
+    }
     container(col)
         .width(Length::Fill)
-        .style(theme::inset_group_style(p))
+        .padding(6)
+        .style(theme::surface_panel_style(p))
         .into()
 }
 
-/// Quiet section label placed above an `inset_group`.
+/// Full-width borderless row with smooth 60fps hover fade and zero corner-bleed selection.
+pub fn hover_row<'a, M: Clone + 'a>(
+    p: Palette,
+    hover_t: f32,
+    selected: bool,
+    on_enter: M,
+    on_exit: M,
+    content: Element<'a, M>,
+) -> Element<'a, M> {
+    mouse_area(
+        container(content)
+            .width(Length::Fill)
+            .style(theme::animated_row_style(p, selected, hover_t)),
+    )
+    .on_enter(on_enter)
+    .on_exit(on_exit)
+    .into()
+}
+
 pub fn section_heading<'a, M: 'a>(
     p: Palette,
     title: &'a str,
@@ -170,14 +181,13 @@ pub fn section_heading<'a, M: 'a>(
         .width(Length::Fill)
         .padding(Padding {
             top: 4.0,
-            right: 4.0,
+            right: 6.0,
             bottom: 6.0,
-            left: 4.0,
+            left: 6.0,
         })
         .into()
 }
 
-/// Primary accent button.
 pub fn primary_button<'a, M: Clone + 'a>(
     p: Palette,
     label: String,
@@ -185,12 +195,12 @@ pub fn primary_button<'a, M: Clone + 'a>(
     on_press: Option<M>,
 ) -> Element<'a, M> {
     let content: Element<'a, M> = if let Some(ic) = icon {
-        row![ic, text(label).font(FONT_MEDIUM).size(12.5)]
+        row![ic, text(label).font(FONT_SEMIBOLD).size(12.5)]
             .spacing(6)
             .align_y(Vertical::Center)
             .into()
     } else {
-        text(label).font(FONT_MEDIUM).size(12.5).into()
+        text(label).font(FONT_SEMIBOLD).size(12.5).into()
     };
 
     let mut b = button(content)
@@ -202,7 +212,6 @@ pub fn primary_button<'a, M: Clone + 'a>(
     b.into()
 }
 
-/// Secondary crisp-bordered button.
 pub fn secondary_button<'a, M: Clone + 'a>(
     p: Palette,
     label: String,
@@ -227,7 +236,6 @@ pub fn secondary_button<'a, M: Clone + 'a>(
     b.into()
 }
 
-/// Destructive solid red confirmation button (used inside confirmation modals / primary destructive CTAs).
 pub fn destructive_button<'a, M: Clone + 'a>(
     p: Palette,
     label: String,
@@ -235,12 +243,12 @@ pub fn destructive_button<'a, M: Clone + 'a>(
     on_press: Option<M>,
 ) -> Element<'a, M> {
     let content: Element<'a, M> = if let Some(ic) = icon {
-        row![ic, text(label).font(FONT_MEDIUM).size(12.5)]
+        row![ic, text(label).font(FONT_SEMIBOLD).size(12.5)]
             .spacing(6)
             .align_y(Vertical::Center)
             .into()
     } else {
-        text(label).font(FONT_MEDIUM).size(12.5).into()
+        text(label).font(FONT_SEMIBOLD).size(12.5).into()
     };
 
     let mut b = button(content)
@@ -252,7 +260,6 @@ pub fn destructive_button<'a, M: Clone + 'a>(
     b.into()
 }
 
-/// Subtle red-tinted destructive button for toolbar actions before confirmation.
 pub fn destructive_subtle_button<'a, M: Clone + 'a>(
     p: Palette,
     label: String,
@@ -277,7 +284,6 @@ pub fn destructive_subtle_button<'a, M: Clone + 'a>(
     b.into()
 }
 
-/// Clean macOS-style search field.
 pub fn search_bar<'a, M: Clone + 'a>(
     p: Palette,
     placeholder: &'a str,
@@ -319,7 +325,6 @@ pub fn search_bar<'a, M: Clone + 'a>(
         .into()
 }
 
-/// macOS Segmented Control container.
 pub fn segmented_control<'a, M: Clone + 'a>(
     p: Palette,
     items: Vec<(&'a str, bool, M)>,
@@ -343,16 +348,14 @@ pub fn segmented_control<'a, M: Clone + 'a>(
         .into()
 }
 
-/// Full-width 1px structural divider.
 pub fn h_divider<'a, M: 'a>(p: Palette) -> Element<'a, M> {
     container(Space::new())
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
-        .style(theme::border_divider_style(p))
+        .style(theme::hairline_style(p))
         .into()
 }
 
-/// Clean centered empty state.
 pub fn empty_state<'a, M: 'a>(
     p: Palette,
     icon: Element<'a, M>,
@@ -385,7 +388,6 @@ pub fn empty_state<'a, M: 'a>(
         .into()
 }
 
-/// Centered, proportion-aware macOS sheet/modal with animated scrim and trailing action footer.
 pub fn modal_shell<'a, M: Clone + 'a>(
     p: Palette,
     alpha: f32,
@@ -400,7 +402,7 @@ pub fn modal_shell<'a, M: Clone + 'a>(
         column![
             text(title)
                 .font(FONT_SEMIBOLD)
-                .size(16)
+                .size(15.5)
                 .color(p.text_primary),
             text(subtitle)
                 .font(FONT_REGULAR)
@@ -429,22 +431,15 @@ pub fn modal_shell<'a, M: Clone + 'a>(
                 bottom: 14.0,
                 left: 20.0,
             }),
-            container(Space::new())
-                .width(Length::Fill)
-                .height(Length::Fixed(1.0))
-                .style(theme::hairline_style(p)),
+            h_divider(p),
             container(body).padding([16, 20]),
-            container(Space::new())
-                .width(Length::Fill)
-                .height(Length::Fixed(1.0))
-                .style(theme::hairline_style(p)),
+            h_divider(p),
             container(footer).padding([14, 20]),
         ],
     )
     .width(Length::Fixed(width))
     .style(theme::modal_sheet_style(p));
 
-    // Stop click propagation through the sheet itself
     let sheet_guard: Element<'a, M> = mouse_area(sheet).into();
 
     let offset_top = (1.0 - alpha.clamp(0.0, 1.0)) * 10.0;

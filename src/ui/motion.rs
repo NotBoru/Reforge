@@ -1,16 +1,27 @@
 use iced::mouse;
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
+use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::time::Instant;
 
-/// Smooth cubic-out deceleration curve (macOS / Linear standard for entering surfaces).
 pub fn ease_out_cubic(t: f32) -> f32 {
     let c = t.clamp(0.0, 1.0);
     1.0 - (1.0 - c).powi(3)
 }
 
-/// Manages restrained, OS-aware UI transitions with zero idle frame overhead.
+pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    let f = t.clamp(0.0, 1.0);
+    Color {
+        r: a.r + (b.r - a.r) * f,
+        g: a.g + (b.g - a.g) * f,
+        b: a.b + (b.b - a.b) * f,
+        a: a.a + (b.a - a.a) * f,
+    }
+}
+
+/// Manages OS-aware view transitions, modal fades, and smooth per-item hover interpolation
+/// with zero idle CPU usage.
 #[derive(Debug, Clone)]
 pub struct MotionState {
     pub reduced_motion: bool,
@@ -20,22 +31,60 @@ pub struct MotionState {
     pub modal_progress: f32,
     spinner_origin: Instant,
     pub spinner_phase: f32,
+    last_tick: Instant,
+    /// Maps interactive element key -> (current 0..1 intensity, is_hovered)
+    hovers: HashMap<String, (f32, bool)>,
 }
 
 impl MotionState {
     pub fn new(reduced_motion: bool) -> Self {
+        let now = Instant::now();
         Self {
             reduced_motion,
             tab_started: None,
             tab_progress: 1.0,
             modal_started: None,
             modal_progress: 1.0,
-            spinner_origin: Instant::now(),
+            spinner_origin: now,
             spinner_phase: 0.0,
+            last_tick: now,
+            hovers: HashMap::new(),
         }
     }
 
+    pub fn set_hover(&mut self, id: String, hovered: bool) {
+        if self.reduced_motion {
+            if hovered {
+                self.hovers.insert(id, (1.0, true));
+            } else {
+                self.hovers.remove(&id);
+            }
+            return;
+        }
+        let now = Instant::now();
+        if !self.has_active_hovers() {
+            self.last_tick = now;
+        }
+        let entry = self.hovers.entry(id).or_insert((0.0, hovered));
+        entry.1 = hovered;
+    }
+
+    pub fn hover_level(&self, id: &str) -> f32 {
+        self.hovers.get(id).map(|(v, _)| *v).unwrap_or(0.0)
+    }
+
+    pub fn clear_hovers(&mut self) {
+        self.hovers.clear();
+    }
+
+    fn has_active_hovers(&self) -> bool {
+        self.hovers
+            .values()
+            .any(|&(val, target)| (target && val < 0.999) || (!target && val > 0.001))
+    }
+
     pub fn trigger_tab_transition(&mut self) {
+        self.hovers.clear();
         if self.reduced_motion {
             self.tab_started = None;
             self.tab_progress = 1.0;
@@ -62,38 +111,53 @@ impl MotionState {
         if self.reduced_motion {
             return false;
         }
-        self.tab_started.is_some() || self.modal_started.is_some()
+        self.tab_started.is_some() || self.modal_started.is_some() || self.has_active_hovers()
     }
 
     pub fn tick(&mut self, now: Instant) {
+        let dt = now
+            .saturating_duration_since(self.last_tick)
+            .as_secs_f32()
+            .clamp(0.001, 0.05);
+        self.last_tick = now;
+
         if let Some(start) = self.tab_started {
-            let t = (now.saturating_duration_since(start).as_secs_f32() / 0.15).min(1.0);
+            let t = (now.saturating_duration_since(start).as_secs_f32() / 0.14).min(1.0);
             self.tab_progress = ease_out_cubic(t);
             if t >= 1.0 {
                 self.tab_started = None;
             }
         }
         if let Some(start) = self.modal_started {
-            let t = (now.saturating_duration_since(start).as_secs_f32() / 0.17).min(1.0);
+            let t = (now.saturating_duration_since(start).as_secs_f32() / 0.16).min(1.0);
             self.modal_progress = ease_out_cubic(t);
             if t >= 1.0 {
                 self.modal_started = None;
             }
         }
+
+        // Smooth hover interpolation: ~105ms fade-in, ~145ms fade-out
+        for (val, target) in self.hovers.values_mut() {
+            if *target {
+                *val = (*val + dt / 0.105).min(1.0);
+            } else {
+                *val = (*val - dt / 0.145).max(0.0);
+            }
+        }
+        self.hovers.retain(|_, &mut (val, target)| target || val > 0.001);
+
         let secs = now.saturating_duration_since(self.spinner_origin).as_secs_f32();
         self.spinner_phase = (secs * 1.45) % 1.0;
     }
 
-    /// Subtle top vertical settle (in px) for tab content entrance (0 under reduced motion).
     pub fn tab_offset_y(&self) -> f32 {
         if self.reduced_motion {
             0.0
         } else {
-            (1.0 - self.tab_progress) * 5.0
+            (1.0 - self.tab_progress) * 4.0
         }
     }
 
-    /// Modal backdrop opacity factor (0..=1).
     pub fn modal_alpha(&self) -> f32 {
         if self.reduced_motion {
             1.0
@@ -103,7 +167,6 @@ impl MotionState {
     }
 }
 
-/// Minimal macOS-style vector spinner arc rendered on GPU/tiny-skia Canvas.
 struct SpinnerProgram {
     phase: f32,
     color: Color,
@@ -125,9 +188,8 @@ impl<M> canvas::Program<M> for SpinnerProgram {
         let center = Point::new(bounds.width / 2.0, bounds.height / 2.0);
         let radius = (bounds.width.min(bounds.height) / 2.0 - 1.5).max(2.0);
 
-        let track_circle = Path::circle(center, radius);
         frame.stroke(
-            &track_circle,
+            &Path::circle(center, radius),
             Stroke::default().with_width(1.8).with_color(self.track),
         );
 
@@ -168,7 +230,6 @@ pub fn spinner<'a, M: 'a>(phase: f32, size: f32, color: Color, track: Color) -> 
     .into()
 }
 
-/// macOS Storage / CleanMyMac proportional segmented horizontal breakdown bar.
 #[derive(Debug, Clone)]
 pub struct StorageSegment {
     pub bytes: u64,
@@ -197,7 +258,6 @@ impl<M> canvas::Program<M> for StorageBarProgram {
         let w = bounds.width;
         let r = h / 2.0;
 
-        // Background track
         frame.fill(
             &Path::rounded_rectangle(Point::ORIGIN, Size::new(w, h), r.into()),
             self.track,
@@ -248,6 +308,6 @@ pub fn storage_breakdown_bar<'a, M: 'a>(
         track,
     })
     .width(Length::Fill)
-    .height(Length::Fixed(8.0))
+    .height(Length::Fixed(7.0))
     .into()
 }

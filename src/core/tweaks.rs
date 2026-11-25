@@ -4,63 +4,53 @@ use winreg::RegKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TweakCategory {
-    Privacy,
     Performance,
     Gaming,
-    Explorer,
-    PowerAndSystem,
-    Maintenance,
+    Network,
+    PrivacyAndEssentials,
 }
 
 impl TweakCategory {
     pub const ALL: &'static [TweakCategory] = &[
-        TweakCategory::Privacy,
         TweakCategory::Performance,
         TweakCategory::Gaming,
-        TweakCategory::Explorer,
-        TweakCategory::PowerAndSystem,
-        TweakCategory::Maintenance,
+        TweakCategory::Network,
+        TweakCategory::PrivacyAndEssentials,
     ];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TweakId {
-    // Privacy
-    DisableTelemetry,
-    DisableAdvertisingId,
-    DisableStartBingSearch,
-    DisableTipsAndAds,
-    DisableActivityHistory,
-    DisableTailoredExperiences,
-    // Performance
-    HighPerformancePowerPlan,
-    DisableBackgroundApps,
+    // Performance & FPS
+    UltimatePowerPlan,
+    HardwareGpuScheduling,
+    Win32PrioritySeparation,
+    UnparkCpuCores,
+    DisablePowerThrottling,
+    DisableMemoryCompression,
+    DisableSysMain,
     DisableStartupDelay,
-    DisableVisualTransparency,
-    DisableDeliveryOptP2p,
     DisableHibernation,
-    // Gaming
+    // Gaming & Input Latency
     DisableGameDvr,
-    DisableMouseAccel,
     EnableGameMode,
+    GamingMmcssPriority,
+    DisableFullscreenOpt,
+    RawMouseAndNoStickyKeys,
+    // Network & Ping
     DisableNetworkThrottling,
-    // Explorer & Interface
-    ShowFileExtensions,
-    ShowHiddenFiles,
-    LaunchExplorerToThisPc,
+    DisableNagleAlgorithm,
+    DisableDeliveryOptP2p,
+    CloudflareDns,
+    // Privacy & Post-Format Essentials
+    DisableTelemetryAndDiagTrack,
+    DisableBackgroundApps,
+    DisableStartBingSearch,
+    DisableAdsAndAutoBloat,
     ClassicContextMenu,
+    ShowExtensionsAndHidden,
     EnableTaskbarEndTask,
-    AlignTaskbarLeft,
-    HideCopilotAndWidgets,
-    // Power & System
-    DisableStickyKeysPopup,
-    DisableFastStartup,
-    DisableWerReporting,
-    DisableAutoRebootUpdates,
-    // Maintenance
-    EnableStorageSense,
-    DisableQuickAccessRecent,
-    DisableSearchHighlights,
+    PreventForcedUpdateReboots,
 }
 
 #[derive(Debug, Clone)]
@@ -95,96 +85,86 @@ fn read_str(root: winreg::HKEY, path: &str, name: &str) -> Option<String> {
 fn write_u32(root: winreg::HKEY, path: &str, name: &str, val: u32) -> Result<(), String> {
     let (key, _) = RegKey::predef(root)
         .create_subkey(path)
-        .map_err(|e| format!("Permission denied (run Reforge as Admin): {e}"))?;
+        .map_err(|e| format!("Admin privileges required: {e}"))?;
     key.set_value(name, &val).map_err(|e| e.to_string())
 }
 
 fn write_str(root: winreg::HKEY, path: &str, name: &str, val: &str) -> Result<(), String> {
     let (key, _) = RegKey::predef(root)
         .create_subkey(path)
-        .map_err(|e| format!("Permission denied (run Reforge as Admin): {e}"))?;
+        .map_err(|e| format!("Admin privileges required: {e}"))?;
     key.set_value(name, &val).map_err(|e| e.to_string())
 }
 
 pub fn detect_tweak_state(id: TweakId) -> bool {
     match id {
-        TweakId::DisableTelemetry => {
-            read_u32(
-                HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\Policies\Microsoft\Windows\DataCollection",
-                "AllowTelemetry",
-            ) == Some(0)
-        }
-        TweakId::DisableAdvertisingId => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo",
-                "Enabled",
-            ) == Some(0)
-        }
-        TweakId::DisableStartBingSearch => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Policies\Microsoft\Windows\Explorer",
-                "DisableSearchBoxSuggestions",
-            ) == Some(1)
-        }
-        TweakId::DisableTipsAndAds => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager",
-                "SubscribedContent-338389Enabled",
-            ) == Some(0)
-        }
-        TweakId::DisableActivityHistory => {
-            read_u32(
-                HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\Policies\Microsoft\Windows\System",
-                "EnableActivityFeed",
-            ) == Some(0)
-        }
-        TweakId::DisableTailoredExperiences => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Privacy",
-                "TailoredExperiencesWithDiagnosticDataEnabled",
-            ) == Some(0)
-        }
-        TweakId::HighPerformancePowerPlan => hidden_std_cmd("powercfg")
+        TweakId::UltimatePowerPlan => hidden_std_cmd("powercfg")
             .arg("/getactivescheme")
             .output()
             .map(|o| {
                 let s = String::from_utf8_lossy(&o.stdout).to_lowercase();
                 s.contains("8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c")
                     || s.contains("e9a42b02-d5df-448d-aa00-03f14749eb61")
+                    || s.contains("ultimate")
+                    || s.contains("desempenho máximo")
+                    || s.contains("alto desempenho")
             })
             .unwrap_or(false),
-        TweakId::DisableBackgroundApps => {
+        TweakId::HardwareGpuScheduling => {
             read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
-                "GlobalUserDisabled",
+                HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers",
+                "HwSchMode",
+            ) == Some(2)
+        }
+        TweakId::Win32PrioritySeparation => {
+            read_u32(
+                HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\PriorityControl",
+                "Win32PrioritySeparation",
+            ) == Some(0x26)
+        }
+        TweakId::UnparkCpuCores => hidden_std_cmd("powercfg")
+            .args([
+                "/q",
+                "SCHEME_CURRENT",
+                "SUB_PROCESSOR",
+                "CPMINCORES",
+            ])
+            .output()
+            .map(|o| {
+                let s = String::from_utf8_lossy(&o.stdout).to_lowercase();
+                s.contains("0x00000064")
+            })
+            .unwrap_or(false),
+        TweakId::DisablePowerThrottling => {
+            read_u32(
+                HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\Power\PowerThrottling",
+                "PowerThrottlingOff",
             ) == Some(1)
+        }
+        TweakId::DisableMemoryCompression => hidden_std_cmd("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-MMAgent).MemoryCompression",
+            ])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().eq_ignore_ascii_case("False"))
+            .unwrap_or(false),
+        TweakId::DisableSysMain => {
+            read_u32(
+                HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Services\SysMain",
+                "Start",
+            ) == Some(4)
         }
         TweakId::DisableStartupDelay => {
             read_u32(
                 HKEY_CURRENT_USER,
                 r"Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize",
                 "StartupDelayInMSec",
-            ) == Some(0)
-        }
-        TweakId::DisableVisualTransparency => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-                "EnableTransparency",
-            ) == Some(0)
-        }
-        TweakId::DisableDeliveryOptP2p => {
-            read_u32(
-                HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization",
-                "DODownloadMode",
             ) == Some(0)
         }
         TweakId::DisableHibernation => {
@@ -201,15 +181,29 @@ pub fn detect_tweak_state(id: TweakId) -> bool {
                 "GameDVR_Enabled",
             ) == Some(0)
         }
-        TweakId::DisableMouseAccel => {
-            read_str(HKEY_CURRENT_USER, r"Control Panel\Mouse", "MouseSpeed").as_deref() == Some("0")
-        }
         TweakId::EnableGameMode => {
             read_u32(
                 HKEY_CURRENT_USER,
                 r"Software\Microsoft\GameBar",
                 "AutoGameModeEnabled",
             ) == Some(1)
+        }
+        TweakId::GamingMmcssPriority => {
+            read_u32(
+                HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games",
+                "GPU Priority",
+            ) == Some(8)
+        }
+        TweakId::DisableFullscreenOpt => {
+            read_u32(
+                HKEY_CURRENT_USER,
+                r"System\GameConfigStore",
+                "GameDVR_FSEBehaviorMode",
+            ) == Some(2)
+        }
+        TweakId::RawMouseAndNoStickyKeys => {
+            read_str(HKEY_CURRENT_USER, r"Control Panel\Mouse", "MouseSpeed").as_deref() == Some("0")
         }
         TweakId::DisableNetworkThrottling => {
             read_u32(
@@ -218,26 +212,65 @@ pub fn detect_tweak_state(id: TweakId) -> bool {
                 "NetworkThrottlingIndex",
             ) == Some(0xFFFF_FFFF)
         }
-        TweakId::ShowFileExtensions => {
+        TweakId::DisableNagleAlgorithm => {
+            let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+            if let Ok(ifaces) = hklm.open_subkey_with_flags(
+                r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces",
+                KEY_READ,
+            ) {
+                for sub in ifaces.enum_keys().flatten() {
+                    if let Ok(k) = ifaces.open_subkey_with_flags(&sub, KEY_READ) {
+                        if k.get_value::<u32, _>("TCPNoDelay").ok() == Some(1) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+        TweakId::DisableDeliveryOptP2p => {
             read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-                "HideFileExt",
+                HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization",
+                "DODownloadMode",
             ) == Some(0)
         }
-        TweakId::ShowHiddenFiles => {
+        TweakId::CloudflareDns => hidden_std_cmd("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses -contains '1.1.1.1' }).Count -gt 0",
+            ])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().eq_ignore_ascii_case("True"))
+            .unwrap_or(false),
+        TweakId::DisableTelemetryAndDiagTrack => {
+            read_u32(
+                HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Policies\Microsoft\Windows\DataCollection",
+                "AllowTelemetry",
+            ) == Some(0)
+        }
+        TweakId::DisableBackgroundApps => {
             read_u32(
                 HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-                "Hidden",
+                r"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
+                "GlobalUserDisabled",
             ) == Some(1)
         }
-        TweakId::LaunchExplorerToThisPc => {
+        TweakId::DisableStartBingSearch => {
             read_u32(
                 HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-                "LaunchTo",
+                r"Software\Policies\Microsoft\Windows\Explorer",
+                "DisableSearchBoxSuggestions",
             ) == Some(1)
+        }
+        TweakId::DisableAdsAndAutoBloat => {
+            read_u32(
+                HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager",
+                "SilentInstalledAppsEnabled",
+            ) == Some(0)
         }
         TweakId::ClassicContextMenu => RegKey::predef(HKEY_CURRENT_USER)
             .open_subkey_with_flags(
@@ -245,6 +278,13 @@ pub fn detect_tweak_state(id: TweakId) -> bool {
                 KEY_READ,
             )
             .is_ok(),
+        TweakId::ShowExtensionsAndHidden => {
+            read_u32(
+                HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
+                "HideFileExt",
+            ) == Some(0)
+        }
         TweakId::EnableTaskbarEndTask => {
             read_u32(
                 HKEY_CURRENT_USER,
@@ -252,75 +292,12 @@ pub fn detect_tweak_state(id: TweakId) -> bool {
                 "TaskbarEndTask",
             ) == Some(1)
         }
-        TweakId::AlignTaskbarLeft => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-                "TaskbarAl",
-            ) == Some(0)
-        }
-        TweakId::HideCopilotAndWidgets => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-                "ShowCopilotButton",
-            ) == Some(0)
-                && read_u32(
-                    HKEY_CURRENT_USER,
-                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-                    "TaskbarDa",
-                ) == Some(0)
-        }
-        TweakId::DisableStickyKeysPopup => {
-            read_str(
-                HKEY_CURRENT_USER,
-                r"Control Panel\Accessibility\StickyKeys",
-                "Flags",
-            )
-            .as_deref()
-                == Some("506")
-        }
-        TweakId::DisableFastStartup => {
-            read_u32(
-                HKEY_LOCAL_MACHINE,
-                r"SYSTEM\CurrentControlSet\Control\Session Manager\Power",
-                "HiberbootEnabled",
-            ) == Some(0)
-        }
-        TweakId::DisableWerReporting => {
-            read_u32(
-                HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\Microsoft\Windows\Windows Error Reporting",
-                "Disabled",
-            ) == Some(1)
-        }
-        TweakId::DisableAutoRebootUpdates => {
+        TweakId::PreventForcedUpdateReboots => {
             read_u32(
                 HKEY_LOCAL_MACHINE,
                 r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU",
                 "NoAutoRebootWithLoggedOnUsers",
             ) == Some(1)
-        }
-        TweakId::EnableStorageSense => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy",
-                "01",
-            ) == Some(1)
-        }
-        TweakId::DisableQuickAccessRecent => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer",
-                "ShowRecent",
-            ) == Some(0)
-        }
-        TweakId::DisableSearchHighlights => {
-            read_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\SearchSettings",
-                "IsDynamicSearchBoxEnabled",
-            ) == Some(0)
         }
     }
 }
@@ -336,146 +313,105 @@ pub fn load_all_tweaks() -> Vec<SystemTweak> {
         bool,
         bool,
     )] = &[
-        // ── PRIVACY ──────────────────────────────────────────────────────────
+        // ── PERFORMANCE & FPS ────────────────────────────────────────────────
         (
-            TweakId::DisableTelemetry,
-            TweakCategory::Privacy,
-            "Minimal Diagnostic Telemetry",
-            "Telemetria Diagnóstica Mínima",
-            "Sets Windows DataCollection policy to minimum security level (0)",
-            "Define a coleta diagnóstica do Windows no nível mínimo (0)",
-            true,
-            true,
-        ),
-        (
-            TweakId::DisableAdvertisingId,
-            TweakCategory::Privacy,
-            "Disable Advertising ID",
-            "Desativar ID de Publicidade",
-            "Stops apps from profiling across sessions using Windows Ad ID",
-            "Impede aplicativos de rastrearem seu perfil via ID de anúncio",
-            true,
-            false,
-        ),
-        (
-            TweakId::DisableStartBingSearch,
-            TweakCategory::Privacy,
-            "Local-Only Start Menu Search",
-            "Busca 100% Local no Menu Iniciar",
-            "Disables Bing web results so Start Menu searches respond instantaneously",
-            "Remove resultados da web Bing e deixa a busca do Iniciar instantânea",
-            true,
-            false,
-        ),
-        (
-            TweakId::DisableTipsAndAds,
-            TweakCategory::Privacy,
-            "Disable Windows Tips & Suggested Ads",
-            "Desativar Dicas e Anúncios do Windows",
-            "Removes promotional app suggestions from Start, Settings, and Lock Screen",
-            "Remove sugestões promocionais no Iniciar, Configurações e tela de bloqueio",
-            true,
-            false,
-        ),
-        (
-            TweakId::DisableActivityHistory,
-            TweakCategory::Privacy,
-            "Disable Activity History Collection",
-            "Desativar Histórico de Atividades",
-            "Stops Windows from logging and syncing local app timeline activity",
-            "Impede o Windows de registrar e sincronizar histórico de uso",
-            true,
-            true,
-        ),
-        (
-            TweakId::DisableTailoredExperiences,
-            TweakCategory::Privacy,
-            "Disable Tailored Experiences & Feedback",
-            "Desativar Experiências Personalizadas",
-            "Prevents diagnostic data from being used for personalized prompts and surveys",
-            "Evita recomendações personalizadas e pedidos de feedback do Windows",
-            true,
-            false,
-        ),
-        // ── PERFORMANCE ──────────────────────────────────────────────────────
-        (
-            TweakId::HighPerformancePowerPlan,
+            TweakId::UltimatePowerPlan,
             TweakCategory::Performance,
-            "High / Ultimate Performance Power Plan",
-            "Plano de Energia Alto Desempenho",
-            "Activates High or Ultimate Performance scheme to prevent aggressive CPU downclocking",
-            "Ativa Alto Desempenho ou Desempenho Máximo evitando queda de clock",
+            "Ultimate / High Performance Power Plan",
+            "Plano de Energia Desempenho Máximo",
+            "Activates Ultimate or High Performance scheme to prevent CPU downclocking",
+            "Ativa Desempenho Máximo / Alto Desempenho eliminando quedas de clock da CPU",
             true,
             false,
         ),
         (
-            TweakId::DisableBackgroundApps,
+            TweakId::HardwareGpuScheduling,
             TweakCategory::Performance,
-            "Disable Background UWP Apps",
-            "Desativar Apps UWP em Segundo Plano",
-            "Prevents unused Microsoft Store apps from waking up in the background",
-            "Impede aplicativos da Microsoft Store de rodarem fechados em segundo plano",
+            "Hardware-Accelerated GPU Scheduling (HAGS)",
+            "Agendamento de GPU Acelerado por Hardware (HAGS)",
+            "Offloads GPU queue scheduling to dedicated VRAM processor for lower latency & DLSS FG",
+            "Reduz latência de fila da GPU e habilita recursos como DLSS Frame Generation",
             true,
+            true,
+        ),
+        (
+            TweakId::Win32PrioritySeparation,
+            TweakCategory::Performance,
+            "Optimize CPU Thread Quantum (Win32Priority 0x26)",
+            "Otimizar Quantum da CPU (Win32Priority 0x26)",
+            "Short foreground-boosted CPU quanta for snappier responsiveness and tighter 1% low FPS",
+            "Prioriza processos em primeiro plano com fatias curtas melhorando 1% low FPS",
+            true,
+            true,
+        ),
+        (
+            TweakId::UnparkCpuCores,
+            TweakCategory::Performance,
+            "Unpark All CPU Cores (Disable Core Parking)",
+            "Desestacionar Todos os Núcleos da CPU",
+            "Keeps 100% of CPU cores active on AC power to eliminate wake-up frame spikes",
+            "Mantém 100% dos núcleos ativos na energia evitando travamentos ao despertar cores",
+            true,
+            true,
+        ),
+        (
+            TweakId::DisablePowerThrottling,
+            TweakCategory::Performance,
+            "Disable Windows Power Throttling",
+            "Desativar Limitação de Energia (Power Throttling)",
+            "Stops Windows from artificially throttling CPU frequency of active apps",
+            "Impede o Windows de limitar a frequência da CPU de aplicativos ativos",
+            true,
+            true,
+        ),
+        (
+            TweakId::DisableMemoryCompression,
+            TweakCategory::Performance,
+            "Disable RAM Memory Compression",
+            "Desativar Compressão de Memória RAM",
+            "Reduces CPU spikes & stutter on systems with 16 GB+ RAM (reboots cleanly)",
+            "Reduz picos de uso de CPU e micro-stutter em PCs com 16 GB ou mais de RAM",
             false,
+            true,
+        ),
+        (
+            TweakId::DisableSysMain,
+            TweakCategory::Performance,
+            "Disable SysMain (Superfetch) Service",
+            "Desativar Serviço SysMain (Superfetch)",
+            "Stops continuous background disk caching that wastes SSD/NVMe I/O & RAM",
+            "Interrompe pré-carregamento contínuo em disco que consome SSD e RAM à toa",
+            true,
+            true,
         ),
         (
             TweakId::DisableStartupDelay,
             TweakCategory::Performance,
-            "Remove Boot Startup Delay",
-            "Remover Atraso de Inicialização",
-            "Sets Explorer Serialize StartupDelayInMSec to 0 for faster desktop readiness",
-            "Define StartupDelayInMSec como 0 para apps carregarem mais rápido no boot",
+            "Remove Boot App Startup Delay",
+            "Remover Atraso de Inicialização do Windows",
+            "Sets Explorer Serialize StartupDelayInMSec to 0 for faster boot readiness",
+            "Define StartupDelayInMSec = 0 para apps carregarem instantaneamente no login",
             true,
             false,
-        ),
-        (
-            TweakId::DisableVisualTransparency,
-            TweakCategory::Performance,
-            "Disable Window Transparency Effects",
-            "Desativar Efeitos de Transparência",
-            "Reduces DWM GPU compositor load on laptops and integrated graphics",
-            "Reduz carga do compositor DWM em notebooks e GPUs integradas",
-            false,
-            false,
-        ),
-        (
-            TweakId::DisableDeliveryOptP2p,
-            TweakCategory::Performance,
-            "Disable Windows Update P2P Uploads",
-            "Desativar Upload P2P do Windows Update",
-            "Stops Windows from uploading update chunks to other PCs over your connection",
-            "Impede o Windows de usar sua banda de upload para enviar updates a outros PCs",
-            true,
-            true,
         ),
         (
             TweakId::DisableHibernation,
             TweakCategory::Performance,
             "Disable Hibernation (Free hiberfil.sys)",
             "Desativar Hibernação (Liberar hiberfil.sys)",
-            "Reclaims several gigabytes on C: (note: disables Windows Fast Startup)",
-            "Libera vários GB no SSD (obs: desativa a Inicialização Rápida)",
+            "Reclaims 6–16 GB of SSD space immediately (note: disables Fast Startup)",
+            "Libera 6 a 16 GB no SSD imediatamente (obs: desativa Inicialização Rápida)",
             false,
             true,
         ),
-        // ── GAMING ───────────────────────────────────────────────────────────
+        // ── GAMING & INPUT LATENCY ───────────────────────────────────────────
         (
             TweakId::DisableGameDvr,
             TweakCategory::Gaming,
             "Disable Game DVR Background Capture",
-            "Desativar Gravação Game DVR",
+            "Desativar Gravação em Segundo Plano (Game DVR)",
             "Eliminates background Xbox capture overhead and frame-time spikes",
-            "Elimina overhead de captura em segundo plano e micro-stutters em jogos",
-            true,
-            false,
-        ),
-        (
-            TweakId::DisableMouseAccel,
-            TweakCategory::Gaming,
-            "Raw 1:1 Mouse Input (Disable Acceleration)",
-            "Mouse 1:1 (Desativar Aceleração)",
-            "Disables 'Enhance pointer precision' for consistent cursor and aim movement",
-            "Desliga 'Aprimorar precisão do ponteiro' para resposta linear 1:1",
+            "Elimina overhead de gravação na GPU e micro-stutters em jogos",
             true,
             false,
         ),
@@ -484,163 +420,162 @@ pub fn load_all_tweaks() -> Vec<SystemTweak> {
             TweakCategory::Gaming,
             "Enable Windows Game Mode",
             "Ativar Modo de Jogo do Windows",
-            "Pauses background updates and prioritizes foreground game threads",
-            "Pausa atualizações em segundo plano e prioriza o jogo aberto",
+            "Prioritizes active game threads and pauses Windows Update during gameplay",
+            "Prioriza threads do jogo e pausa atualizações enquanto você joga",
             true,
             false,
         ),
+        (
+            TweakId::GamingMmcssPriority,
+            TweakCategory::Gaming,
+            "Gaming GPU & MMCSS High Scheduling Priority",
+            "Prioridade Máxima de GPU e MMCSS para Jogos",
+            "Sets SystemResponsiveness = 0, GPU Priority = 8 & High scheduling for game tasks",
+            "Define SystemResponsiveness = 0, GPU Priority = 8 e agendamento Alto em jogos",
+            true,
+            true,
+        ),
+        (
+            TweakId::DisableFullscreenOpt,
+            TweakCategory::Gaming,
+            "Disable Fullscreen Optimizations (Global)",
+            "Desativar Otimizações de Tela Cheia (Global)",
+            "Forces true exclusive fullscreen presentation to reduce DWM input lag",
+            "Força tela cheia exclusiva reduzindo o input lag do compositor DWM",
+            true,
+            false,
+        ),
+        (
+            TweakId::RawMouseAndNoStickyKeys,
+            TweakCategory::Gaming,
+            "Raw 1:1 Mouse Input & Disable Sticky Keys",
+            "Mouse 1:1 Sem Aceleração + Desativar Teclas de Aderência",
+            "Turns off pointer acceleration for consistent aim and kills Shift 5x popup",
+            "Remove aceleração do mouse para mira 1:1 e bloqueia popup ao apertar Shift 5x",
+            true,
+            false,
+        ),
+        // ── NETWORK & PING ───────────────────────────────────────────────────
         (
             TweakId::DisableNetworkThrottling,
-            TweakCategory::Gaming,
-            "Disable Multimedia Network Throttling",
-            "Desativar Throttling de Rede Multimídia",
-            "Sets NetworkThrottlingIndex to 0xFFFFFFFF to prevent packet pacing jitter",
-            "Define NetworkThrottlingIndex como 0xFFFFFFFF reduzindo jitter em jogos",
+            TweakCategory::Network,
+            "Disable Network Throttling Index",
+            "Desativar Throttling de Rede do Windows",
+            "Sets NetworkThrottlingIndex = 0xFFFFFFFF removing Windows' 10-packet/ms cap",
+            "Remove o limite de 10 pacotes/ms do Windows melhorando ping e estabilidade",
+            true,
+            true,
+        ),
+        (
+            TweakId::DisableNagleAlgorithm,
+            TweakCategory::Network,
+            "Disable Nagle's Algorithm (TCPNoDelay)",
+            "Desativar Algoritmo de Nagle (TCPNoDelay)",
+            "Sets TCPNoDelay & TcpAckFrequency = 1 on active adapters for lower packet latency",
+            "Envia pacotes TCP imediatamente sem buffer reduzindo latência em jogos online",
+            true,
+            true,
+        ),
+        (
+            TweakId::DisableDeliveryOptP2p,
+            TweakCategory::Network,
+            "Disable Windows Update P2P Uploads",
+            "Desativar Uploads P2P do Windows Update",
+            "Stops Windows from using your upload bandwidth to seed updates to other PCs",
+            "Impede o Windows de consumir seu upload enviando updates para outros PCs",
+            true,
+            true,
+        ),
+        (
+            TweakId::CloudflareDns,
+            TweakCategory::Network,
+            "Use Cloudflare 1.1.1.1 Low-Latency DNS",
+            "Usar DNS Cloudflare 1.1.1.1 (Menor Latência)",
+            "Configures 1.1.1.1 / 1.0.0.1 on active network adapters (reverts cleanly to DHCP)",
+            "Aplica 1.1.1.1 / 1.0.0.1 nas placas ativas para resolução rápida (reversível para DHCP)",
             false,
             true,
         ),
-        // ── EXPLORER & INTERFACE ─────────────────────────────────────────────
+        // ── PRIVACY & POST-FORMAT ESSENTIALS ─────────────────────────────────
         (
-            TweakId::ShowFileExtensions,
-            TweakCategory::Explorer,
-            "Show File Name Extensions",
-            "Mostrar Extensões de Arquivos",
-            "Always displays .exe, .zip, .json, .dll extensions in File Explorer",
-            "Exibe sempre extensões .exe, .zip, .json no Explorador de Arquivos",
+            TweakId::DisableTelemetryAndDiagTrack,
+            TweakCategory::PrivacyAndEssentials,
+            "Disable Telemetry & DiagTrack Service",
+            "Desativar Telemetria e Serviço DiagTrack",
+            "Sets AllowTelemetry = 0 and stops/disables background Connected User Experiences",
+            "Define telemetria no mínimo e desativa o serviço DiagTrack em segundo plano",
+            true,
+            true,
+        ),
+        (
+            TweakId::DisableBackgroundApps,
+            TweakCategory::PrivacyAndEssentials,
+            "Disable Background UWP Apps",
+            "Desativar Apps UWP em Segundo Plano",
+            "Prevents closed Microsoft Store apps from waking up and using RAM/CPU",
+            "Impede aplicativos fechados da Store de consumirem RAM e CPU",
             true,
             false,
         ),
         (
-            TweakId::ShowHiddenFiles,
-            TweakCategory::Explorer,
-            "Show Hidden Files & Folders",
-            "Mostrar Arquivos e Pastas Ocultas",
-            "Makes AppData and hidden directories immediately browsable",
-            "Torna pastas como AppData imediatamente visíveis no Explorador",
+            TweakId::DisableStartBingSearch,
+            TweakCategory::PrivacyAndEssentials,
+            "Local-Only Start Menu (Disable Bing Search)",
+            "Menu Iniciar 100% Local (Sem Busca Bing)",
+            "Removes online Bing lag so Start Menu searches return local apps instantly",
+            "Remove a busca online do Bing deixando o Menu Iniciar instantâneo",
             true,
             false,
         ),
         (
-            TweakId::LaunchExplorerToThisPc,
-            TweakCategory::Explorer,
-            "Open File Explorer to 'This PC'",
-            "Abrir Explorador em 'Este Computador'",
-            "Opens directly to drives and folders instead of Home / Quick Access",
-            "Abre diretamente nos discos e partições em vez da tela Início",
+            TweakId::DisableAdsAndAutoBloat,
+            TweakCategory::PrivacyAndEssentials,
+            "Disable Windows Ads & Silent Bloat Installs",
+            "Desativar Anúncios e Instalação Silenciosa de Bloat",
+            "Stops Start/Lock Screen promos and prevents Windows auto-downloading OEM apps",
+            "Remove anúncios do Windows e bloqueia download automático de bloatware",
             true,
             false,
         ),
         (
             TweakId::ClassicContextMenu,
-            TweakCategory::Explorer,
+            TweakCategory::PrivacyAndEssentials,
             "Classic Right-Click Context Menu (Win11)",
             "Menu de Contexto Clássico (Win11)",
-            "Restores the full right-click menu immediately without 'Show more options'",
-            "Restaura o menu completo ao clicar com botão direito no Windows 11",
+            "Restores the instant full right-click menu without 'Show more options'",
+            "Restaura o menu completo imediato no botão direito do Windows 11",
+            true,
+            false,
+        ),
+        (
+            TweakId::ShowExtensionsAndHidden,
+            TweakCategory::PrivacyAndEssentials,
+            "Show File Extensions & Hidden Files",
+            "Mostrar Extensões e Arquivos Ocultos",
+            "Displays .exe/.json/.dll extensions and reveals AppData in File Explorer",
+            "Exibe extensões reais de arquivos e mostra pastas ocultas como AppData",
             true,
             false,
         ),
         (
             TweakId::EnableTaskbarEndTask,
-            TweakCategory::Explorer,
-            "Enable 'End Task' on Taskbar (Win11)",
-            "Ativar 'Finalizar Tarefa' na Barra (Win11)",
-            "Adds instant End Task directly to taskbar right-click menus",
-            "Adiciona opção rápida de Finalizar Tarefa no menu da barra de tarefas",
+            TweakCategory::PrivacyAndEssentials,
+            "Enable 'End Task' on Taskbar Right-Click",
+            "Ativar 'Finalizar Tarefa' na Barra de Tarefas",
+            "Kill frozen apps in one click directly from the Windows 11 taskbar",
+            "Encerra aplicativos travados direto no botão direito da barra de tarefas",
             true,
             false,
         ),
         (
-            TweakId::AlignTaskbarLeft,
-            TweakCategory::Explorer,
-            "Align Taskbar to Left (Win11)",
-            "Alinhar Barra de Tarefas à Esquerda",
-            "Anchors Start button and pinned icons to the classic bottom-left corner",
-            "Posiciona o Menu Iniciar e ícones fixados no canto esquerdo clássico",
-            false,
-            false,
-        ),
-        (
-            TweakId::HideCopilotAndWidgets,
-            TweakCategory::Explorer,
-            "Hide Copilot & Widgets from Taskbar",
-            "Ocultar Copilot e Widgets da Barra",
-            "Declutters taskbar by hiding both Copilot and Widgets news buttons",
-            "Limpa a barra de tarefas ocultando os botões de Copilot e Widgets",
-            true,
-            false,
-        ),
-        // ── POWER & SYSTEM ───────────────────────────────────────────────────
-        (
-            TweakId::DisableStickyKeysPopup,
-            TweakCategory::PowerAndSystem,
-            "Disable Sticky Keys Shift Popup",
-            "Desativar Aviso de Teclas de Aderência",
-            "Prevents pressing Shift 5 times from minimizing fullscreen apps",
-            "Evita a interrupção em tela cheia ao pressionar Shift 5 vezes",
-            true,
-            false,
-        ),
-        (
-            TweakId::DisableFastStartup,
-            TweakCategory::PowerAndSystem,
-            "Disable Fast Startup (Clean Cold Boots)",
-            "Desativar Inicialização Rápida",
-            "Ensures Shutdown performs a full kernel reset for cleaner dual-boot & driver stability",
-            "Garante desligamento real do kernel para estabilidade de drivers e dual-boot",
-            false,
-            true,
-        ),
-        (
-            TweakId::DisableWerReporting,
-            TweakCategory::PowerAndSystem,
-            "Disable Windows Error Reporting",
-            "Desativar Relatório de Erros (WER)",
-            "Stops Windows from generating and uploading background crash dump queues",
-            "Impede o acúmulo e envio automático de relatórios de falha em segundo plano",
-            false,
-            true,
-        ),
-        (
-            TweakId::DisableAutoRebootUpdates,
-            TweakCategory::PowerAndSystem,
-            "Prevent Forced Update Reboots While Logged In",
-            "Evitar Reinício Forçado do Windows Update",
-            "Blocks Windows Update from automatically restarting while you have an active session",
-            "Impede o Windows Update de reiniciar o PC automaticamente durante sua sessão",
+            TweakId::PreventForcedUpdateReboots,
+            TweakCategory::PrivacyAndEssentials,
+            "Prevent Forced Update Reboots While Active",
+            "Bloquear Reinício Forçado do Windows Update",
+            "Stops Windows Update from restarting your PC while you are signed in",
+            "Impede o Windows Update de reiniciar o PC automaticamente durante seu uso",
             true,
             true,
-        ),
-        // ── MAINTENANCE ──────────────────────────────────────────────────────
-        (
-            TweakId::EnableStorageSense,
-            TweakCategory::Maintenance,
-            "Enable Automatic Storage Sense",
-            "Ativar Sensor de Armazenamento Automático",
-            "Allows Windows to periodically clean expired temp files automatically",
-            "Permite que o Windows limpe arquivos temporários antigos periodicamente",
-            true,
-            false,
-        ),
-        (
-            TweakId::DisableQuickAccessRecent,
-            TweakCategory::Maintenance,
-            "Hide Recently Used Files in Explorer",
-            "Ocultar Arquivos Recentes no Explorador",
-            "Keeps Explorer Home clean by not tracking recently opened documents",
-            "Mantém o Explorador limpo sem listar documentos abertos recentemente",
-            false,
-            false,
-        ),
-        (
-            TweakId::DisableSearchHighlights,
-            TweakCategory::Maintenance,
-            "Disable Taskbar Search Highlights",
-            "Desativar Destaques na Caixa de Pesquisa",
-            "Removes daily illustrations and trending banners inside Windows Search",
-            "Remove ilustrações diárias e banners de tendências na busca do Windows",
-            true,
-            false,
         ),
     ];
 
@@ -659,30 +594,298 @@ pub fn load_all_tweaks() -> Vec<SystemTweak> {
         .collect()
 }
 
-/// Applies (`enable = true`) or cleanly reverts (`enable = false`) a tweak, then verifies
-/// the resulting system state instead of blindly reporting success.
+/// Applies or reverts a tweak and verifies that Windows reflected the updated state.
 pub fn set_tweak_verified(id: TweakId, enable: bool) -> Result<bool, String> {
     apply_tweak_raw(id, enable)?;
     let actual = detect_tweak_state(id);
     if actual != enable {
-        return Err("Setting was written, but Windows did not reflect the new state (Administrator privileges or restart may be required).".into());
+        return Err(
+            "Setting applied, but Windows did not confirm the new state (Administrator rights or restart may be required)."
+                .into(),
+        );
     }
     Ok(actual)
 }
 
 fn apply_tweak_raw(id: TweakId, enable: bool) -> Result<(), String> {
     match id {
-        TweakId::DisableTelemetry => write_u32(
+        TweakId::UltimatePowerPlan => {
+            if enable {
+                let dup = hidden_std_cmd("powercfg")
+                    .args(["-duplicatescheme", "e9a42b02-d5df-448d-aa00-03f14749eb61"])
+                    .output()
+                    .ok();
+                let activated_ult = dup.and_then(|o| {
+                    let s = String::from_utf8_lossy(&o.stdout).to_string();
+                    s.split_whitespace()
+                        .find(|w| w.len() == 36 && w.chars().filter(|&c| c == '-').count() == 4)
+                        .map(|guid| {
+                            hidden_std_cmd("powercfg")
+                                .args(["/setactive", guid])
+                                .status()
+                                .map(|st| st.success())
+                                .unwrap_or(false)
+                        })
+                });
+                if activated_ult != Some(true) {
+                    let _ = hidden_std_cmd("powercfg")
+                        .args(["/setactive", "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"])
+                        .output();
+                }
+            } else {
+                let _ = hidden_std_cmd("powercfg")
+                    .args(["/setactive", "381b4222-f694-41f0-9685-ff5bb260df2e"])
+                    .output();
+            }
+            Ok(())
+        }
+        TweakId::HardwareGpuScheduling => write_u32(
             HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Policies\Microsoft\Windows\DataCollection",
-            "AllowTelemetry",
+            r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers",
+            "HwSchMode",
+            if enable { 2 } else { 1 },
+        ),
+        TweakId::Win32PrioritySeparation => write_u32(
+            HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\PriorityControl",
+            "Win32PrioritySeparation",
+            if enable { 0x26 } else { 2 },
+        ),
+        TweakId::UnparkCpuCores => {
+            let val = if enable { "100" } else { "5" };
+            let out = hidden_std_cmd("powercfg")
+                .args([
+                    "/setacvalueindex",
+                    "SCHEME_CURRENT",
+                    "SUB_PROCESSOR",
+                    "CPMINCORES",
+                    val,
+                ])
+                .output()
+                .map_err(|e| e.to_string())?;
+            let _ = hidden_std_cmd("powercfg")
+                .args(["/setactive", "SCHEME_CURRENT"])
+                .output();
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err("Failed to update CPU core parking index.".into())
+            }
+        }
+        TweakId::DisablePowerThrottling => write_u32(
+            HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Power\PowerThrottling",
+            "PowerThrottlingOff",
+            if enable { 1 } else { 0 },
+        ),
+        TweakId::DisableMemoryCompression => {
+            let cmd = if enable {
+                "Disable-MMAgent -MemoryCompression -ErrorAction Stop"
+            } else {
+                "Enable-MMAgent -MemoryCompression -ErrorAction Stop"
+            };
+            let out = hidden_std_cmd("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err("Administrator privileges required to change Memory Compression.".into())
+            }
+        }
+        TweakId::DisableSysMain => {
+            write_u32(
+                HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Services\SysMain",
+                "Start",
+                if enable { 4 } else { 2 },
+            )?;
+            let action = if enable { "stop" } else { "start" };
+            let _ = hidden_std_cmd("sc").args([action, "SysMain"]).output();
+            Ok(())
+        }
+        TweakId::DisableStartupDelay => {
+            if enable {
+                write_u32(
+                    HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize",
+                    "StartupDelayInMSec",
+                    0,
+                )
+            } else {
+                let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey_all(
+                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize",
+                );
+                Ok(())
+            }
+        }
+        TweakId::DisableHibernation => {
+            let arg = if enable { "off" } else { "on" };
+            let out = hidden_std_cmd("powercfg")
+                .args(["/h", arg])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err("Administrator privileges required to toggle Hibernation.".into())
+            }
+        }
+        TweakId::DisableGameDvr => {
+            let v = if enable { 0 } else { 1 };
+            write_u32(HKEY_CURRENT_USER, r"System\GameConfigStore", "GameDVR_Enabled", v)?;
+            let _ = write_u32(
+                HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\GameDVR",
+                "AppCaptureEnabled",
+                v,
+            );
+            Ok(())
+        }
+        TweakId::EnableGameMode => write_u32(
+            HKEY_CURRENT_USER,
+            r"Software\Microsoft\GameBar",
+            "AutoGameModeEnabled",
+            if enable { 1 } else { 0 },
+        ),
+        TweakId::GamingMmcssPriority => {
+            let sys_prof =
+                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile";
+            let games = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games";
+            if enable {
+                write_u32(HKEY_LOCAL_MACHINE, sys_prof, "SystemResponsiveness", 0)?;
+                write_u32(HKEY_LOCAL_MACHINE, games, "GPU Priority", 8)?;
+                write_u32(HKEY_LOCAL_MACHINE, games, "Priority", 6)?;
+                write_str(HKEY_LOCAL_MACHINE, games, "Scheduling Category", "High")?;
+                write_str(HKEY_LOCAL_MACHINE, games, "SFIO Priority", "High")
+            } else {
+                write_u32(HKEY_LOCAL_MACHINE, sys_prof, "SystemResponsiveness", 20)?;
+                write_u32(HKEY_LOCAL_MACHINE, games, "GPU Priority", 2)?;
+                write_u32(HKEY_LOCAL_MACHINE, games, "Priority", 2)?;
+                write_str(HKEY_LOCAL_MACHINE, games, "Scheduling Category", "Medium")?;
+                write_str(HKEY_LOCAL_MACHINE, games, "SFIO Priority", "Normal")
+            }
+        }
+        TweakId::DisableFullscreenOpt => {
+            let path = r"System\GameConfigStore";
+            if enable {
+                write_u32(HKEY_CURRENT_USER, path, "GameDVR_FSEBehaviorMode", 2)?;
+                write_u32(
+                    HKEY_CURRENT_USER,
+                    path,
+                    "GameDVR_DXGIHonorFSEWindowsCompatible",
+                    1,
+                )?;
+                write_u32(HKEY_CURRENT_USER, path, "GameDVR_HonorUserFSEBehaviorMode", 1)
+            } else {
+                write_u32(HKEY_CURRENT_USER, path, "GameDVR_FSEBehaviorMode", 0)?;
+                write_u32(
+                    HKEY_CURRENT_USER,
+                    path,
+                    "GameDVR_DXGIHonorFSEWindowsCompatible",
+                    0,
+                )?;
+                write_u32(HKEY_CURRENT_USER, path, "GameDVR_HonorUserFSEBehaviorMode", 0)
+            }
+        }
+        TweakId::RawMouseAndNoStickyKeys => {
+            let mouse = r"Control Panel\Mouse";
+            let sticky = r"Control Panel\Accessibility\StickyKeys";
+            if enable {
+                write_str(HKEY_CURRENT_USER, mouse, "MouseSpeed", "0")?;
+                write_str(HKEY_CURRENT_USER, mouse, "MouseThreshold1", "0")?;
+                write_str(HKEY_CURRENT_USER, mouse, "MouseThreshold2", "0")?;
+                write_str(HKEY_CURRENT_USER, sticky, "Flags", "506")
+            } else {
+                write_str(HKEY_CURRENT_USER, mouse, "MouseSpeed", "1")?;
+                write_str(HKEY_CURRENT_USER, mouse, "MouseThreshold1", "6")?;
+                write_str(HKEY_CURRENT_USER, mouse, "MouseThreshold2", "10")?;
+                write_str(HKEY_CURRENT_USER, sticky, "Flags", "510")
+            }
+        }
+        TweakId::DisableNetworkThrottling => write_u32(
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile",
+            "NetworkThrottlingIndex",
+            if enable { 0xFFFF_FFFF } else { 10 },
+        ),
+        TweakId::DisableNagleAlgorithm => {
+            let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+            let base = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces";
+            let ifaces = hklm
+                .open_subkey_with_flags(base, KEY_READ)
+                .map_err(|e| format!("Admin privileges required: {e}"))?;
+            let mut touched = 0;
+            for sub in ifaces.enum_keys().flatten() {
+                let full = format!("{base}\\{sub}");
+                if let Ok(k) = hklm.open_subkey_with_flags(&full, KEY_READ | KEY_SET_VALUE) {
+                    let has_ip = k.get_value::<String, _>("DhcpIPAddress").is_ok()
+                        || k.get_value::<String, _>("IPAddress").is_ok();
+                    if has_ip {
+                        if enable {
+                            let _ = k.set_value("TCPNoDelay", &1u32);
+                            let _ = k.set_value("TcpAckFrequency", &1u32);
+                        } else {
+                            let _ = k.delete_value("TCPNoDelay");
+                            let _ = k.delete_value("TcpAckFrequency");
+                        }
+                        touched += 1;
+                    }
+                }
+            }
+            if touched == 0 {
+                Err("No active TCP/IP network interfaces could be modified (run as Admin).".into())
+            } else {
+                Ok(())
+            }
+        }
+        TweakId::DisableDeliveryOptP2p => write_u32(
+            HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization",
+            "DODownloadMode",
             if enable { 0 } else { 1 },
         ),
-        TweakId::DisableAdvertisingId => write_u32(
+        TweakId::CloudflareDns => {
+            let ps = if enable {
+                "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses ('1.1.1.1','1.0.0.1') }"
+            } else {
+                "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses }"
+            };
+            let out = hidden_std_cmd("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if out.status.success() {
+                let _ = hidden_std_cmd("ipconfig").arg("/flushdns").output();
+                Ok(())
+            } else {
+                Err("Administrator privileges required to modify DNS servers.".into())
+            }
+        }
+        TweakId::DisableTelemetryAndDiagTrack => {
+            write_u32(
+                HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Policies\Microsoft\Windows\DataCollection",
+                "AllowTelemetry",
+                if enable { 0 } else { 1 },
+            )?;
+            let _ = write_u32(
+                HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Services\DiagTrack",
+                "Start",
+                if enable { 4 } else { 2 },
+            );
+            let _ = hidden_std_cmd("sc")
+                .args([if enable { "stop" } else { "start" }, "DiagTrack"])
+                .output();
+            Ok(())
+        }
+        TweakId::DisableBackgroundApps => write_u32(
             HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo",
-            "Enabled",
-            if enable { 0 } else { 1 },
+            r"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
+            "GlobalUserDisabled",
+            if enable { 1 } else { 0 },
         ),
         TweakId::DisableStartBingSearch => {
             write_u32(
@@ -699,159 +902,17 @@ fn apply_tweak_raw(id: TweakId, enable: bool) -> Result<(), String> {
             );
             Ok(())
         }
-        TweakId::DisableTipsAndAds => {
+        TweakId::DisableAdsAndAutoBloat => {
             let v = if enable { 0 } else { 1 };
-            let path = r"Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager";
-            write_u32(HKEY_CURRENT_USER, path, "SubscribedContent-338389Enabled", v)?;
-            let _ = write_u32(HKEY_CURRENT_USER, path, "SubscribedContent-338388Enabled", v);
-            let _ = write_u32(HKEY_CURRENT_USER, path, "SubscribedContent-310093Enabled", v);
-            let _ = write_u32(HKEY_CURRENT_USER, path, "SystemPaneSuggestionsEnabled", v);
-            let _ = write_u32(HKEY_CURRENT_USER, path, "SoftLandingEnabled", v);
+            let cdm = r"Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager";
+            write_u32(HKEY_CURRENT_USER, cdm, "SilentInstalledAppsEnabled", v)?;
+            let _ = write_u32(HKEY_CURRENT_USER, cdm, "OemPreInstalledAppsEnabled", v);
+            let _ = write_u32(HKEY_CURRENT_USER, cdm, "PreInstalledAppsEnabled", v);
+            let _ = write_u32(HKEY_CURRENT_USER, cdm, "SubscribedContent-338389Enabled", v);
+            let _ = write_u32(HKEY_CURRENT_USER, cdm, "SubscribedContent-338388Enabled", v);
+            let _ = write_u32(HKEY_CURRENT_USER, cdm, "SystemPaneSuggestionsEnabled", v);
             Ok(())
         }
-        TweakId::DisableActivityHistory => {
-            let v = if enable { 0 } else { 1 };
-            let path = r"SOFTWARE\Policies\Microsoft\Windows\System";
-            write_u32(HKEY_LOCAL_MACHINE, path, "EnableActivityFeed", v)?;
-            let _ = write_u32(HKEY_LOCAL_MACHINE, path, "PublishUserActivities", v);
-            let _ = write_u32(HKEY_LOCAL_MACHINE, path, "UploadUserActivities", v);
-            Ok(())
-        }
-        TweakId::DisableTailoredExperiences => {
-            let v = if enable { 0 } else { 1 };
-            write_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Privacy",
-                "TailoredExperiencesWithDiagnosticDataEnabled",
-                v,
-            )?;
-            let _ = write_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Siuf\Rules",
-                "NumberOfSIUFInPeriod",
-                if enable { 0 } else { 1 },
-            );
-            Ok(())
-        }
-        TweakId::HighPerformancePowerPlan => {
-            if enable {
-                let _ = hidden_std_cmd("powercfg")
-                    .args(["-duplicatescheme", "e9a42b02-d5df-448d-aa00-03f14749eb61"])
-                    .output();
-                let high = hidden_std_cmd("powercfg")
-                    .args(["/setactive", "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"])
-                    .output()
-                    .map_err(|e| e.to_string())?;
-                if !high.status.success() {
-                    let _ = hidden_std_cmd("powercfg")
-                        .args(["/setactive", "e9a42b02-d5df-448d-aa00-03f14749eb61"])
-                        .output();
-                }
-            } else {
-                let _ = hidden_std_cmd("powercfg")
-                    .args(["/setactive", "381b4222-f694-41f0-9685-ff5bb260df2e"])
-                    .output();
-            }
-            Ok(())
-        }
-        TweakId::DisableBackgroundApps => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
-            "GlobalUserDisabled",
-            if enable { 1 } else { 0 },
-        ),
-        TweakId::DisableStartupDelay => {
-            if enable {
-                write_u32(
-                    HKEY_CURRENT_USER,
-                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize",
-                    "StartupDelayInMSec",
-                    0,
-                )
-            } else {
-                let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey_all(
-                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize",
-                );
-                Ok(())
-            }
-        }
-        TweakId::DisableVisualTransparency => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-            "EnableTransparency",
-            if enable { 0 } else { 1 },
-        ),
-        TweakId::DisableDeliveryOptP2p => write_u32(
-            HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization",
-            "DODownloadMode",
-            if enable { 0 } else { 1 },
-        ),
-        TweakId::DisableHibernation => {
-            let arg = if enable { "off" } else { "on" };
-            let out = hidden_std_cmd("powercfg")
-                .args(["/h", arg])
-                .output()
-                .map_err(|e| e.to_string())?;
-            if out.status.success() {
-                Ok(())
-            } else {
-                Err("Administrator privileges are required to toggle Hibernation.".into())
-            }
-        }
-        TweakId::DisableGameDvr => {
-            let v = if enable { 0 } else { 1 };
-            write_u32(HKEY_CURRENT_USER, r"System\GameConfigStore", "GameDVR_Enabled", v)?;
-            let _ = write_u32(
-                HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\GameDVR",
-                "AppCaptureEnabled",
-                v,
-            );
-            Ok(())
-        }
-        TweakId::DisableMouseAccel => {
-            let path = r"Control Panel\Mouse";
-            if enable {
-                write_str(HKEY_CURRENT_USER, path, "MouseSpeed", "0")?;
-                write_str(HKEY_CURRENT_USER, path, "MouseThreshold1", "0")?;
-                write_str(HKEY_CURRENT_USER, path, "MouseThreshold2", "0")
-            } else {
-                write_str(HKEY_CURRENT_USER, path, "MouseSpeed", "1")?;
-                write_str(HKEY_CURRENT_USER, path, "MouseThreshold1", "6")?;
-                write_str(HKEY_CURRENT_USER, path, "MouseThreshold2", "10")
-            }
-        }
-        TweakId::EnableGameMode => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\GameBar",
-            "AutoGameModeEnabled",
-            if enable { 1 } else { 0 },
-        ),
-        TweakId::DisableNetworkThrottling => write_u32(
-            HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile",
-            "NetworkThrottlingIndex",
-            if enable { 0xFFFF_FFFF } else { 10 },
-        ),
-        TweakId::ShowFileExtensions => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-            "HideFileExt",
-            if enable { 0 } else { 1 },
-        ),
-        TweakId::ShowHiddenFiles => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-            "Hidden",
-            if enable { 1 } else { 2 },
-        ),
-        TweakId::LaunchExplorerToThisPc => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-            "LaunchTo",
-            if enable { 1 } else { 2 },
-        ),
         TweakId::ClassicContextMenu => {
             let clsid = r"Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}";
             let inproc = format!(r"{clsid}\InprocServer32");
@@ -862,65 +923,22 @@ fn apply_tweak_raw(id: TweakId, enable: bool) -> Result<(), String> {
                 Ok(())
             }
         }
+        TweakId::ShowExtensionsAndHidden => {
+            let adv = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
+            write_u32(HKEY_CURRENT_USER, adv, "HideFileExt", if enable { 0 } else { 1 })?;
+            write_u32(HKEY_CURRENT_USER, adv, "Hidden", if enable { 1 } else { 2 })
+        }
         TweakId::EnableTaskbarEndTask => write_u32(
             HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings",
             "TaskbarEndTask",
             if enable { 1 } else { 0 },
         ),
-        TweakId::AlignTaskbarLeft => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
-            "TaskbarAl",
-            if enable { 0 } else { 1 },
-        ),
-        TweakId::HideCopilotAndWidgets => {
-            let v = if enable { 0 } else { 1 };
-            let path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
-            write_u32(HKEY_CURRENT_USER, path, "ShowCopilotButton", v)?;
-            write_u32(HKEY_CURRENT_USER, path, "TaskbarDa", v)
-        }
-        TweakId::DisableStickyKeysPopup => write_str(
-            HKEY_CURRENT_USER,
-            r"Control Panel\Accessibility\StickyKeys",
-            "Flags",
-            if enable { "506" } else { "510" },
-        ),
-        TweakId::DisableFastStartup => write_u32(
-            HKEY_LOCAL_MACHINE,
-            r"SYSTEM\CurrentControlSet\Control\Session Manager\Power",
-            "HiberbootEnabled",
-            if enable { 0 } else { 1 },
-        ),
-        TweakId::DisableWerReporting => write_u32(
-            HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Microsoft\Windows\Windows Error Reporting",
-            "Disabled",
-            if enable { 1 } else { 0 },
-        ),
-        TweakId::DisableAutoRebootUpdates => write_u32(
+        TweakId::PreventForcedUpdateReboots => write_u32(
             HKEY_LOCAL_MACHINE,
             r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU",
             "NoAutoRebootWithLoggedOnUsers",
             if enable { 1 } else { 0 },
-        ),
-        TweakId::EnableStorageSense => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy",
-            "01",
-            if enable { 1 } else { 0 },
-        ),
-        TweakId::DisableQuickAccessRecent => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Explorer",
-            "ShowRecent",
-            if enable { 0 } else { 1 },
-        ),
-        TweakId::DisableSearchHighlights => write_u32(
-            HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\SearchSettings",
-            "IsDynamicSearchBoxEnabled",
-            if enable { 0 } else { 1 },
         ),
     }
 }
@@ -930,9 +948,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_all_30_tweaks_across_all_categories() {
+    fn loads_all_26_high_impact_tweaks_across_categories() {
         let all = load_all_tweaks();
-        assert_eq!(all.len(), 30);
+        assert_eq!(all.len(), 26);
         for &cat in TweakCategory::ALL {
             assert!(
                 all.iter().any(|t| t.category == cat),
@@ -942,4 +960,3 @@ mod tests {
         }
     }
 }
-

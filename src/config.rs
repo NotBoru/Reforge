@@ -16,7 +16,7 @@ pub struct PortableConfig {
 impl Default for PortableConfig {
     fn default() -> Self {
         Self {
-            theme: ThemeMode::System,
+            theme: ThemeMode::Dark,
             lang: Lang::En,
             max_concurrent_installs: 4,
             auto_cleanup_downloads: true,

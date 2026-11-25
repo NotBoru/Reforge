@@ -2,15 +2,15 @@ use crate::app::{App, Message};
 use crate::core::updater::UpdateItemStatus;
 use crate::i18n::tr;
 use crate::ui::components::{
-    app_logo, checkbox_box, empty_state, h_divider, inset_group, page_header, primary_button,
-    secondary_button, status_dot,
+    app_logo, checkbox_box, clean_list, empty_state, h_divider, hover_row, page_header,
+    primary_button, secondary_button, status_dot,
 };
 use crate::ui::icons;
 use crate::ui::motion;
 use crate::ui::theme::{self, Palette, FONT_MEDIUM, FONT_REGULAR, FONT_SEMIBOLD};
 use iced::alignment::Vertical;
 use iced::widget::{button, column, row, scrollable, text};
-use iced::{Color, Element, Length, Padding};
+use iced::{Element, Length, Padding};
 
 pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     let s = tr(app.config.lang);
@@ -44,7 +44,12 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 s.check_updates.into()
             },
             if app.updates_checking {
-                Some(motion::spinner(app.motion.spinner_phase, 13.0, p.accent, p.hairline))
+                Some(motion::spinner(
+                    app.motion.spinner_phase,
+                    13.0,
+                    p.accent,
+                    p.hairline,
+                ))
             } else {
                 Some(icons::refresh(13.0, p.text_secondary).into())
             },
@@ -64,13 +69,18 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 s.update_selected.into()
             },
             if app.updates_running {
-                Some(motion::spinner(app.motion.spinner_phase, 13.0, Color::WHITE, p.hairline))
+                Some(motion::spinner(
+                    app.motion.spinner_phase,
+                    13.0,
+                    p.accent_fg,
+                    p.hairline,
+                ))
             } else {
                 Some(
                     icons::download(
                         13.0,
                         if selected_count > 0 {
-                            Color::WHITE
+                            p.accent_fg
                         } else {
                             p.text_muted
                         },
@@ -88,10 +98,10 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
     let header = page_header(p, s.updater_title, s.updater_sub, actions.into());
 
     let mut body = column![].spacing(10).padding(Padding {
-        top: 14.0 + app.motion.tab_offset_y(),
-        right: 24.0,
+        top: 12.0 + app.motion.tab_offset_y(),
+        right: 20.0,
         bottom: 24.0,
-        left: 24.0,
+        left: 20.0,
     });
 
     if app.updates_checking {
@@ -116,10 +126,13 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             s.up_to_date_sub,
         ));
     } else {
+        // Calm borderless rows — NEVER paint a wall of colored rows when all 47 are checked!
         let rows: Vec<Element<'a, Message>> = app
             .updates
             .iter()
             .map(|upd| {
+                let hkey = format!("upd_{}", upd.id);
+                let ht = app.motion.hover_level(&hkey);
                 let logo = app.update_icon(upd);
                 let version_diff = row![
                     text(&upd.current_version)
@@ -142,7 +155,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                             .size(12)
                             .color(p.accent),
                     )
-                    .padding([5, 10])
+                    .padding([6, 11])
                     .style(theme::btn_ghost(p))
                     .on_press_maybe(if app.updates_running {
                         None
@@ -167,7 +180,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                             .size(12)
                             .color(p.danger),
                     )
-                    .padding([5, 10])
+                    .padding([6, 11])
                     .style(theme::btn_ghost(p))
                     .on_press_maybe(if app.updates_running {
                         None
@@ -199,18 +212,25 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                     .align_y(Vertical::Center),
                 )
                 .width(Length::Fill)
-                .padding([10, 14])
-                .style(theme::btn_list_row(p, upd.selected))
+                .padding([9, 12])
+                .style(theme::btn_transparent(p))
                 .on_press(Message::ToggleUpdateSelection(upd.id.clone()));
 
-                row![row_btn, trailing]
-                    .spacing(4)
-                    .align_y(Vertical::Center)
-                    .into()
+                hover_row(
+                    p,
+                    ht,
+                    false,
+                    Message::HoverEnter(hkey.clone()),
+                    Message::HoverExit(hkey),
+                    row![row_btn, trailing]
+                        .spacing(6)
+                        .align_y(Vertical::Center)
+                        .into(),
+                )
             })
             .collect();
 
-        body = body.push(inset_group(p, rows));
+        body = body.push(clean_list(rows));
     }
 
     let scroll = scrollable(body)

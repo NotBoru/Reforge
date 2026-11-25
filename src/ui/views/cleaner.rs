@@ -3,7 +3,7 @@ use crate::core::cleaner::CleanCategoryId;
 use crate::core::winapi::format_bytes;
 use crate::i18n::{tr, Lang};
 use crate::ui::components::{
-    checkbox_box, h_divider, inset_group, page_header, primary_button, secondary_button,
+    checkbox_box, clean_list, h_divider, hover_row, page_header, primary_button, secondary_button,
 };
 use crate::ui::icons;
 use crate::ui::motion::{self, StorageSegment};
@@ -15,15 +15,15 @@ use iced::{Color, Element, Length, Padding};
 fn category_color(id: CleanCategoryId, p: Palette) -> Color {
     match id {
         CleanCategoryId::UserTemp => p.accent,
-        CleanCategoryId::WindowsTemp => Color::from_rgb(0.35, 0.70, 0.98),
-        CleanCategoryId::BrowserCaches => Color::from_rgb(0.95, 0.58, 0.22),
-        CleanCategoryId::GpuShaderCaches => Color::from_rgb(0.32, 0.78, 0.52),
-        CleanCategoryId::WindowsLogsAndDumps => Color::from_rgb(0.88, 0.42, 0.42),
-        CleanCategoryId::WindowsUpdateCache => Color::from_rgb(0.62, 0.54, 0.94),
-        CleanCategoryId::AppCaches => Color::from_rgb(0.24, 0.75, 0.78),
-        CleanCategoryId::ExplorerCaches => Color::from_rgb(0.85, 0.68, 0.26),
-        CleanCategoryId::RecycleBin => Color::from_rgb(0.56, 0.60, 0.68),
-        CleanCategoryId::PrefetchAndDns => Color::from_rgb(0.75, 0.52, 0.72),
+        CleanCategoryId::WindowsTemp => p.success,
+        CleanCategoryId::BrowserCaches => Color::from_rgb(0.95, 0.65, 0.45),
+        CleanCategoryId::GpuShaderCaches => Color::from_rgb(0.48, 0.85, 0.76),
+        CleanCategoryId::WindowsLogsAndDumps => Color::from_rgb(0.96, 0.48, 0.48),
+        CleanCategoryId::WindowsUpdateCache => Color::from_rgb(0.85, 0.72, 0.50),
+        CleanCategoryId::AppCaches => Color::from_rgb(0.62, 0.78, 0.85),
+        CleanCategoryId::ExplorerCaches => Color::from_rgb(0.82, 0.64, 0.56),
+        CleanCategoryId::RecycleBin => Color::from_rgb(0.56, 0.56, 0.58),
+        CleanCategoryId::PrefetchAndDns => Color::from_rgb(0.74, 0.64, 0.78),
     }
 }
 
@@ -48,7 +48,12 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 s.scan_junk.into()
             },
             if app.cleaner_scanning {
-                Some(motion::spinner(app.motion.spinner_phase, 13.0, p.accent, p.hairline))
+                Some(motion::spinner(
+                    app.motion.spinner_phase,
+                    13.0,
+                    p.accent,
+                    p.hairline,
+                ))
             } else {
                 Some(icons::refresh(13.0, p.text_secondary).into())
             },
@@ -66,12 +71,17 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 format!("{} ({})", s.clean_selected, format_bytes(selected_bytes))
             },
             if app.cleaner_cleaning {
-                Some(motion::spinner(app.motion.spinner_phase, 13.0, Color::WHITE, p.hairline))
+                Some(motion::spinner(
+                    app.motion.spinner_phase,
+                    13.0,
+                    p.accent_fg,
+                    p.hairline,
+                ))
             } else {
                 Some(
                     icons::cleaner(
                         13.0,
-                        if can_clean { Color::WHITE } else { p.text_muted },
+                        if can_clean { p.accent_fg } else { p.text_muted },
                     )
                     .into(),
                 )
@@ -88,7 +98,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
 
     let header = page_header(p, s.cleaner_title, s.cleaner_sub, actions.into());
 
-    // macOS Storage / CleanMyMac unified summary strip with proportional breakdown bar
     let segments: Vec<StorageSegment> = app
         .clean_scan
         .categories
@@ -154,9 +163,8 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
 
     let summary_box = container(summary_inner)
         .width(Length::Fill)
-        .style(theme::inset_group_style(p));
+        .style(theme::surface_panel_style(p));
 
-    // Unified hairline inset list — ZERO stacked blue boxes!
     let rows: Vec<Element<'a, Message>> = app
         .clean_scan
         .categories
@@ -167,6 +175,8 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 Lang::PtBr => (cat.name_pt, cat.desc_pt),
             };
             let dot_color = category_color(cat.id, p);
+            let hkey = format!("cln_{:?}", cat.id);
+            let ht = app.motion.hover_level(&hkey);
 
             let mut title_row = row![
                 container(Space::new())
@@ -185,7 +195,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 title_row = title_row.push(icons::lock(11.5, p.text_muted));
             }
 
-            button(
+            let inner = button(
                 row![
                     checkbox_box(cat.selected, p),
                     column![
@@ -218,20 +228,28 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 .align_y(Vertical::Center),
             )
             .width(Length::Fill)
-            .padding([11, 16])
-            .style(theme::btn_list_row(p, false))
-            .on_press(Message::ToggleCleanCategory(cat.id))
-            .into()
+            .padding([10, 14])
+            .style(theme::btn_transparent(p))
+            .on_press(Message::ToggleCleanCategory(cat.id));
+
+            hover_row(
+                p,
+                ht,
+                false,
+                Message::HoverEnter(hkey.clone()),
+                Message::HoverExit(hkey),
+                inner.into(),
+            )
         })
         .collect();
 
-    let body = column![summary_box, inset_group(p, rows)]
+    let body = column![summary_box, clean_list(rows)]
         .spacing(14)
         .padding(Padding {
             top: 14.0 + app.motion.tab_offset_y(),
-            right: 24.0,
+            right: 20.0,
             bottom: 24.0,
-            left: 24.0,
+            left: 20.0,
         });
 
     let scroll = scrollable(body)

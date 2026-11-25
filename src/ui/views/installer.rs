@@ -1,28 +1,86 @@
 use crate::app::{App, InstallTaskState, InstallerFilter, InstallerSort, Message};
 use crate::core::catalog::{catalog, AppCategory, CatalogApp, PresetKind};
-use crate::core::installer::InstallStage;
+use crate::core::installer::{InstallStage, WingetSearchResult};
 use crate::core::winapi::{format_bytes, format_speed};
 use crate::i18n::{tr, Lang};
 use crate::ui::components::{
-    app_logo, checkbox_box, destructive_subtle_button, empty_state, h_divider, inset_group,
-    page_header, primary_button, search_bar, secondary_button, section_heading, segmented_control,
-    status_dot,
+    app_logo, checkbox_box, clean_list, destructive_subtle_button, empty_state, h_divider,
+    hover_row, page_header, primary_button, search_bar, segmented_control, soft_panel, status_dot,
 };
 use crate::ui::icons;
 use crate::ui::motion;
 use crate::ui::theme::{self, Palette, FONT_MEDIUM, FONT_REGULAR, FONT_SEMIBOLD};
 use iced::alignment::Vertical;
 use iced::widget::{button, column, container, progress_bar, row, scrollable, text, Space};
-use iced::{Color, Element, Length, Padding};
+use iced::{Element, Length, Padding};
+
+fn format_count(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
+}
+
+fn featured_rank(id: &str) -> usize {
+    const FEATURED_ORDER: &[&str] = &[
+        "claude_desktop",
+        "chatgpt",
+        "cursor",
+        "opencode_desktop",
+        "gemini_desktop",
+        "intellij_idea",
+        "chrome",
+        "brave",
+        "discord",
+        "steam",
+        "hydra",
+        "lunar_client",
+        "cheatbreaker",
+        "minecraft_launcher",
+        "vcredist_2015_x64",
+        "directx_runtime",
+        "vscode",
+        "claude_code",
+        "opencode_cli",
+        "ollama",
+        "7zip",
+        "spotify",
+        "vlc",
+        "ddu",
+        "logitech_ghub",
+        "razer_synapse4",
+        "process_lasso",
+        "msi_afterburner",
+        "obs",
+        "blender",
+        "obsidian",
+        "anki",
+        "git",
+        "powertoys",
+        "everything",
+    ];
+    FEATURED_ORDER
+        .iter()
+        .position(|&x| x == id)
+        .unwrap_or(FEATURED_ORDER.len())
+}
 
 fn cat_label(cat: AppCategory, lang: Lang) -> &'static str {
     let s = tr(lang);
     match cat {
         AppCategory::All => s.cat_all,
+        AppCategory::Ai => s.cat_ai,
+        AppCategory::Dependencies => s.cat_deps,
+        AppCategory::Fixes => s.cat_fixes,
+        AppCategory::Gaming => s.cat_gaming,
         AppCategory::Browsers => s.cat_browsers,
         AppCategory::Communication => s.cat_comm,
         AppCategory::Development => s.cat_dev,
-        AppCategory::Gaming => s.cat_gaming,
         AppCategory::Media => s.cat_media,
         AppCategory::Utilities => s.cat_utils,
         AppCategory::Productivity => s.cat_prod,
@@ -67,12 +125,17 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         p,
         cta_label,
         if app.installing_active {
-            Some(motion::spinner(app.motion.spinner_phase, 13.0, Color::WHITE, p.hairline))
+            Some(motion::spinner(
+                app.motion.spinner_phase,
+                13.0,
+                p.accent_fg,
+                p.hairline,
+            ))
         } else {
             Some(
                 icons::download(
                     14.0,
-                    if can_install { Color::WHITE } else { p.text_muted },
+                    if can_install { p.accent_fg } else { p.text_muted },
                 )
                 .into(),
             )
@@ -86,7 +149,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
 
     let header = page_header(p, s.installer_title, s.installer_sub, header_actions.into());
 
-    // Unified clean toolbar: Search + WinGet query + Filter segment + Sort segment
     let filter_seg = segmented_control(
         p,
         vec![
@@ -107,7 +169,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             ),
         ],
     );
-
     let sort_seg = segmented_control(
         p,
         vec![
@@ -132,44 +193,31 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             Message::InstallerSearchChanged,
             Message::InstallerSearchChanged(String::new()),
         ),
-        secondary_button(
-            p,
-            if app.winget_searching {
-                s.scanning.into()
-            } else {
-                s.search_winget.into()
-            },
-            if app.winget_searching {
-                Some(motion::spinner(app.motion.spinner_phase, 13.0, p.accent, p.hairline))
-            } else {
-                Some(icons::globe(13.0, p.text_secondary).into())
-            },
-            if app.installer_search.trim().len() >= 2 && !app.winget_searching {
-                Some(Message::SearchWingetCatalog)
-            } else {
-                None
-            },
-        ),
         filter_seg,
         sort_seg,
     ]
     .spacing(8)
     .align_y(Vertical::Center);
 
-    // Subtle category tab strip + quiet quick-select presets on the trailing edge
     let mut cat_row = row![].spacing(2).align_y(Vertical::Center);
     for &cat in AppCategory::ALL {
         let active = app.installer_category == cat;
+        let key = format!("cat_{cat:?}");
+        let ht = app.motion.hover_level(&key);
         cat_row = cat_row.push(
-            button(
-                text(cat_label(cat, app.config.lang))
-                    .font(if active { FONT_SEMIBOLD } else { FONT_MEDIUM })
-                    .size(12)
-                    .color(if active { p.accent } else { p.text_secondary }),
+            iced::widget::mouse_area(
+                button(
+                    text(cat_label(cat, app.config.lang))
+                        .font(if active { FONT_SEMIBOLD } else { FONT_MEDIUM })
+                        .size(11.5)
+                        .color(if active { p.accent } else { p.text_secondary }),
+                )
+                .padding([5, 7])
+                .style(theme::btn_nav_animated(p, active, ht))
+                .on_press(Message::InstallerCategoryChanged(cat)),
             )
-            .padding([5, 9])
-            .style(theme::btn_nav(p, active))
-            .on_press(Message::InstallerCategoryChanged(cat)),
+            .on_enter(Message::HoverEnter(key.clone()))
+            .on_exit(Message::HoverExit(key)),
         );
     }
 
@@ -180,50 +228,38 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 .size(11.5)
                 .color(p.text_muted),
         )
-        .padding([4, 7])
+        .padding([4, 6])
         .style(theme::btn_ghost(p))
         .on_press(Message::ApplyInstallPreset(kind))
     };
 
-    let sub_strip = row![
+    let cat_and_presets = row![
         cat_row,
         Space::new().width(Length::Fill),
+        preset_link(PresetKind::Ai, s.preset_ai),
+        preset_link(PresetKind::Dependencies, s.preset_deps),
         preset_link(PresetKind::Essentials, s.preset_essentials),
-        preset_link(PresetKind::Developer, s.preset_developer),
         preset_link(PresetKind::Gaming, s.preset_gaming),
-        preset_link(PresetKind::Creator, s.preset_creator),
+        preset_link(PresetKind::Developer, s.preset_developer),
     ]
     .spacing(2)
     .align_y(Vertical::Center);
 
-    let toolbar = container(column![search_strip, sub_strip].spacing(10)).padding(Padding {
+    let toolbar = container(column![search_strip, cat_and_presets].spacing(9)).padding(Padding {
         top: 0.0,
         right: 24.0,
         bottom: 12.0,
         left: 24.0,
     });
 
-    // Scrollable main content
-    let mut body = column![].spacing(16).padding(Padding {
-        top: 14.0 + app.motion.tab_offset_y(),
-        right: 24.0,
-        bottom: 24.0,
-        left: 24.0,
-    });
-
-    if !app.install_queue.is_empty() {
-        body = body.push(view_install_queue(app, p));
-    }
-
-    if !app.winget_results.is_empty() {
-        body = body.push(view_winget_results(app, p));
-    }
-
+    // ── UNIFIED CURATED + 16,500+ WINGET INFINITE SCROLL LIST ────────────────
     let q = app.installer_search.trim().to_lowercase();
-    let mut filtered: Vec<&CatalogApp> = catalog()
+    let mut curated_filtered: Vec<&CatalogApp> = catalog()
         .iter()
         .filter(|item| {
-            let cat_ok = app.installer_category == AppCategory::All
+            // When user types a search query, search across ALL categories so nothing is hidden!
+            let cat_ok = !q.is_empty()
+                || app.installer_category == AppCategory::All
                 || item.category == app.installer_category;
             let inst = app.is_catalog_app_installed(item);
             let filter_ok = match app.installer_filter {
@@ -242,27 +278,149 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         .collect();
 
     if app.installer_sort == InstallerSort::Name {
-        filtered.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        curated_filtered.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    } else if app.installer_category == AppCategory::All && q.is_empty() {
+        curated_filtered.sort_by_key(|a| featured_rank(a.id));
     }
 
-    if filtered.is_empty() {
-        body = body.push(empty_state(
-            p,
-            icons::search(22.0, p.text_muted).into(),
-            s.empty_search,
-            "Try searching the live WinGet catalog with the button above.",
-        ));
+    let include_winget_tail = app.installer_filter != InstallerFilter::Installed
+        && (app.installer_category == AppCategory::All || !q.is_empty());
+
+    let winget_available = if include_winget_tail {
+        app.winget_matched_indices.len()
     } else {
-        // Unified Apple/Linear hairline inset table — ZERO boxed card soup!
-        let rows: Vec<Element<'a, Message>> = filtered
-            .into_iter()
-            .map(|item| view_catalog_row(app, item, p))
-            .collect();
-        body = body.push(inset_group(p, rows));
+        0
+    };
+    let total_available = curated_filtered.len() + winget_available;
+    let limit = app.installer_visible_limit.max(60);
+
+    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(limit.min(total_available));
+
+    for item in curated_filtered.iter().take(limit) {
+        rows.push(view_catalog_row(app, item, p));
+    }
+
+    if include_winget_tail && rows.len() < limit {
+        let remaining = limit - rows.len();
+        for &wg_idx in app.winget_matched_indices.iter().take(remaining) {
+            if let Some(wg_item) = app.winget_full_index.get(wg_idx) {
+                rows.push(view_winget_row(app, wg_item, p));
+            }
+        }
+    }
+
+    let shown_count = rows.len();
+
+    let mut body = column![].spacing(12).padding(Padding {
+        top: 12.0 + app.motion.tab_offset_y(),
+        right: 20.0,
+        bottom: 28.0,
+        left: 20.0,
+    });
+
+    if !app.install_queue.is_empty() {
+        body = body.push(view_install_queue(app, p));
+    }
+
+    if rows.is_empty() {
+        if app.winget_searching {
+            body = body.push(empty_state(
+                p,
+                motion::spinner(app.motion.spinner_phase, 22.0, p.accent, p.hairline),
+                s.scanning,
+                "Indexing 16,000+ Microsoft WinGet packages...",
+            ));
+        } else {
+            body = body.push(empty_state(
+                p,
+                icons::search(22.0, p.text_muted).into(),
+                s.empty_search,
+                "",
+            ));
+        }
+    } else {
+        body = body.push(clean_list(rows));
+
+        // Subtle infinite-scroll status footer
+        let mut foot = row![].spacing(10).align_y(Vertical::Center);
+        if app.winget_searching {
+            foot = foot
+                .push(motion::spinner(
+                    app.motion.spinner_phase,
+                    12.5,
+                    p.accent,
+                    p.hairline,
+                ))
+                .push(
+                    text(if app.config.lang == Lang::PtBr {
+                        "Indexando +16.000 pacotes WinGet em segundo plano..."
+                    } else {
+                        "Indexing 16,000+ WinGet packages in the background..."
+                    })
+                    .font(FONT_REGULAR)
+                    .size(11.5)
+                    .color(p.text_muted),
+                );
+        } else if shown_count < total_available {
+            let lbl = if app.config.lang == Lang::PtBr {
+                format!(
+                    "Exibindo {} de {} pacotes  ·  Role para carregar mais",
+                    format_count(shown_count),
+                    format_count(total_available)
+                )
+            } else {
+                format!(
+                    "Showing {} of {} packages  ·  Scroll down to load more",
+                    format_count(shown_count),
+                    format_count(total_available)
+                )
+            };
+            foot = foot.push(
+                text(lbl)
+                    .font(FONT_REGULAR)
+                    .size(11.5)
+                    .color(p.text_muted),
+            );
+            foot = foot.push(
+                button(
+                    text(if app.config.lang == Lang::PtBr {
+                        "Carregar mais"
+                    } else {
+                        "Load more"
+                    })
+                    .font(FONT_MEDIUM)
+                    .size(11.5)
+                    .color(p.accent),
+                )
+                .padding([4, 8])
+                .style(theme::btn_ghost(p))
+                .on_press(Message::InstallerLoadMore),
+            );
+        } else {
+            let lbl = if app.config.lang == Lang::PtBr {
+                format!("{} pacotes disponíveis", format_count(total_available))
+            } else {
+                format!("{} packages available", format_count(total_available))
+            };
+            foot = foot.push(
+                text(lbl)
+                    .font(FONT_REGULAR)
+                    .size(11.5)
+                    .color(p.text_muted),
+            );
+        }
+
+        body = body.push(
+            container(foot)
+                .width(Length::Fill)
+                .center_x(Length::Fill)
+                .padding([10, 0]),
+        );
     }
 
     let scroll = scrollable(body)
         .height(Length::Fill)
+        .on_scroll(Message::InstallerScrolled)
         .style(theme::scrollable_style(p));
 
     column![header, toolbar, h_divider(p), scroll]
@@ -282,11 +440,13 @@ fn view_catalog_row<'a>(
         Lang::En => item.desc_en,
         Lang::PtBr => item.desc_pt,
     };
+    let hkey = format!("catrow_{}", item.id);
+    let ht = app.motion.hover_level(&hkey);
 
-    let main_click = button(
+    let main_btn = button(
         row![
             checkbox_box(selected, p),
-            app_logo(app.catalog_icon(item), item.name, 28.0, p),
+            app_logo(app.catalog_icon(item), item.name, 26.0, p),
             column![
                 text(item.name)
                     .font(FONT_SEMIBOLD)
@@ -298,7 +458,7 @@ fn view_catalog_row<'a>(
                     .color(p.text_muted),
             ]
             .spacing(1)
-            .width(Length::Fixed(185.0)),
+            .width(Length::Fixed(205.0)),
             text(desc)
                 .font(FONT_REGULAR)
                 .size(12)
@@ -314,8 +474,8 @@ fn view_catalog_row<'a>(
         .align_y(Vertical::Center),
     )
     .width(Length::Fill)
-    .padding([10, 14])
-    .style(theme::btn_list_row(p, selected))
+    .padding([9, 12])
+    .style(theme::btn_transparent(p))
     .on_press(Message::ToggleCatalogApp(item.id));
 
     let info_btn = button(icons::info(14.0, p.text_muted))
@@ -323,9 +483,78 @@ fn view_catalog_row<'a>(
         .style(theme::btn_ghost(p))
         .on_press(Message::OpenCatalogDetails(item));
 
-    row![main_click, info_btn]
-        .align_y(Vertical::Center)
-        .into()
+    hover_row(
+        p,
+        ht,
+        selected,
+        Message::HoverEnter(hkey.clone()),
+        Message::HoverExit(hkey),
+        row![main_btn, info_btn]
+            .align_y(Vertical::Center)
+            .into(),
+    )
+}
+
+fn view_winget_row<'a>(
+    app: &'a App,
+    item: &'a WingetSearchResult,
+    p: Palette,
+) -> Element<'a, Message> {
+    let selected = app.selected_winget_ids.contains_key(&item.id);
+    let hkey = format!("wg_{}", item.id);
+    let ht = app.motion.hover_level(&hkey);
+    let desc_line = if item.description.is_empty() {
+        item.id.clone()
+    } else {
+        item.description.chars().take(78).collect()
+    };
+
+    let inner = button(
+        row![
+            checkbox_box(selected, p),
+            app_logo(app.winget_icon(&item.id, &item.name), &item.name, 26.0, p),
+            column![
+                text(&item.name)
+                    .font(FONT_SEMIBOLD)
+                    .size(13)
+                    .color(p.text_primary),
+                text(if item.publisher.is_empty() {
+                    item.id.clone()
+                } else {
+                    item.publisher.clone()
+                })
+                .font(FONT_REGULAR)
+                .size(11.5)
+                .color(p.text_muted),
+            ]
+            .spacing(1)
+            .width(Length::Fixed(205.0)),
+            text(desc_line)
+                .font(FONT_REGULAR)
+                .size(12)
+                .color(p.text_secondary)
+                .width(Length::Fill),
+            text(&item.version)
+                .font(FONT_REGULAR)
+                .size(11.5)
+                .color(p.text_muted),
+        ]
+        .spacing(12)
+        .align_y(Vertical::Center),
+    )
+    .width(Length::Fill)
+    .padding([9, 12])
+    .style(theme::btn_transparent(p))
+    .on_press(Message::ToggleWingetApp(item.id.clone(), item.name.clone()));
+
+    hover_row(
+        p,
+        ht,
+        selected,
+        Message::HoverEnter(hkey.clone()),
+        Message::HoverExit(hkey),
+        inner.into(),
+    )
 }
 
 fn view_install_queue<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
@@ -361,7 +590,7 @@ fn view_install_queue<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
 
     column![
         container(header_row).padding([0, 4]),
-        inset_group(p, rows),
+        soft_panel(p, rows),
     ]
     .spacing(6)
     .into()
@@ -442,63 +671,6 @@ fn view_queue_row<'a>(app: &'a App, task: &'a InstallTaskState, p: Palette) -> E
         .spacing(10)
         .align_y(Vertical::Center),
     )
-    .padding([9, 14])
+    .padding([8, 10])
     .into()
-}
-
-fn view_winget_results<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
-    let s = tr(app.config.lang);
-    let head = row![
-        section_heading(
-            p,
-            s.winget_results_title,
-            Some(format!("{} results", app.winget_results.len())),
-        ),
-        button(
-            text(s.close)
-                .font(FONT_MEDIUM)
-                .size(11.5)
-                .color(p.text_muted),
-        )
-        .padding([3, 8])
-        .style(theme::btn_ghost(p))
-        .on_press(Message::ClearWingetResults),
-    ]
-    .align_y(Vertical::Center);
-
-    let rows: Vec<Element<'a, Message>> = app
-        .winget_results
-        .iter()
-        .map(|item| {
-            let selected = app.selected_winget_ids.contains_key(&item.id);
-            button(
-                row![
-                    checkbox_box(selected, p),
-                    app_logo(app.winget_icon(&item.id), &item.name, 24.0, p),
-                    text(&item.name)
-                        .font(FONT_MEDIUM)
-                        .size(12.5)
-                        .color(p.text_primary),
-                    text(&item.id)
-                        .font(FONT_REGULAR)
-                        .size(11.5)
-                        .color(p.text_muted)
-                        .width(Length::Fill),
-                    text(&item.version)
-                        .font(FONT_REGULAR)
-                        .size(11.5)
-                        .color(p.text_secondary),
-                ]
-                .spacing(10)
-                .align_y(Vertical::Center),
-            )
-            .width(Length::Fill)
-            .padding([9, 14])
-            .style(theme::btn_list_row(p, selected))
-            .on_press(Message::ToggleWingetApp(item.id.clone(), item.name.clone()))
-            .into()
-        })
-        .collect();
-
-    column![head, inset_group(p, rows)].spacing(4).into()
 }

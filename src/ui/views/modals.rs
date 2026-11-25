@@ -3,7 +3,7 @@ use crate::core::uninstaller::UninstallStage;
 use crate::core::winapi::format_bytes;
 use crate::i18n::{tr, Lang};
 use crate::ui::components::{
-    app_logo, destructive_button, inset_group, modal_shell, primary_button, secondary_button,
+    app_logo, destructive_button, modal_shell, primary_button, secondary_button, soft_panel,
     status_dot,
 };
 use crate::ui::icons;
@@ -64,17 +64,17 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                         .align_y(Vertical::Center),
                     )
                     .padding(iced::Padding {
-                        top: 8.0,
-                        right: 18.0,
-                        bottom: 8.0,
-                        left: 12.0,
+                        top: 7.0,
+                        right: 16.0,
+                        bottom: 7.0,
+                        left: 10.0,
                     })
                     .into()
                 })
                 .collect();
 
-            let list_box = scrollable(inset_group(p, app_rows))
-                .height(Length::Fixed((apps.len() as f32 * 46.0).clamp(52.0, 210.0)))
+            let list_box = scrollable(soft_panel(p, app_rows))
+                .height(Length::Fixed((apps.len() as f32 * 48.0).clamp(58.0, 210.0)))
                 .style(theme::scrollable_style(p));
 
             let options = column![
@@ -228,11 +228,18 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                         );
                     }
 
-                    container(col).padding([9, 12]).into()
+                    container(col)
+                        .padding(iced::Padding {
+                            top: 8.0,
+                            right: 16.0,
+                            bottom: 8.0,
+                            left: 10.0,
+                        })
+                        .into()
                 })
                 .collect();
 
-            let body = scrollable(inset_group(p, rows))
+            let body = scrollable(soft_panel(p, rows))
                 .height(Length::Fixed((items.len() as f32 * 52.0).clamp(72.0, 280.0)))
                 .style(theme::scrollable_style(p));
 
@@ -244,7 +251,7 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                     footer = footer.push(primary_button(
                         p,
                         s.scan_traces.into(),
-                        Some(icons::search(13.0, Color::WHITE).into()),
+                        Some(icons::search(13.0, p.accent_fg).into()),
                         Some(Message::ProceedToBatchTraceScan),
                     ));
                 }
@@ -292,7 +299,7 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                             .font(FONT_MEDIUM)
                             .size(12)
                             .color(p.text_secondary)
-                            .width(Length::Fixed(120.0)),
+                            .width(Length::Fixed(115.0)),
                         text(if val.is_empty() { "—".into() } else { val })
                             .font(FONT_REGULAR)
                             .size(12)
@@ -302,7 +309,7 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                     .spacing(12)
                     .align_y(Vertical::Center),
                 )
-                .padding([9, 12])
+                .padding([8, 10])
                 .into()
             };
 
@@ -331,7 +338,7 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
             .spacing(12)
             .align_y(Vertical::Center);
 
-            let info = inset_group(
+            let info = soft_panel(
                 p,
                 vec![
                     meta_row(
@@ -427,7 +434,7 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                             .font(FONT_MEDIUM)
                             .size(12)
                             .color(p.text_secondary)
-                            .width(Length::Fixed(115.0)),
+                            .width(Length::Fixed(110.0)),
                         text(val)
                             .font(FONT_REGULAR)
                             .size(12)
@@ -436,11 +443,11 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                     ]
                     .spacing(12),
                 )
-                .padding([9, 12])
+                .padding([8, 10])
                 .into()
             };
 
-            let info = inset_group(
+            let info = soft_panel(
                 p,
                 vec![
                     meta_row("WinGet ID", cat_app.winget_id.to_string()),
@@ -521,7 +528,7 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
             };
             let desc = if *apply_recommended {
                 format!(
-                    "This will enable {affected_count} recommended reversible Windows privacy, performance, and interface settings."
+                    "This will enable {affected_count} recommended reversible Windows performance, gaming, network, and privacy optimizations."
                 )
             } else {
                 format!(
@@ -586,10 +593,10 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                         .spacing(10),
                     )
                     .padding(iced::Padding {
-                        top: 8.0,
-                        right: 18.0,
-                        bottom: 8.0,
-                        left: 12.0,
+                        top: 7.0,
+                        right: 16.0,
+                        bottom: 7.0,
+                        left: 10.0,
                     })
                     .into()
                 })
@@ -600,7 +607,7 @@ pub fn view<'a>(app: &'a App, modal: &'a ActiveModal, p: Palette) -> Element<'a,
                     .font(FONT_REGULAR)
                     .size(12)
                     .color(p.text_secondary),
-                scrollable(inset_group(p, rows))
+                scrollable(soft_panel(p, rows))
                     .height(Length::Fixed((packages.len() as f32 * 38.0).clamp(60.0, 220.0)))
                     .style(theme::scrollable_style(p)),
             ]

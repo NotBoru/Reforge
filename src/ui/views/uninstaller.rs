@@ -3,8 +3,8 @@ use crate::core::uninstaller::{InstalledApp, TraceConfidence, TraceKind};
 use crate::core::winapi::format_bytes;
 use crate::i18n::tr;
 use crate::ui::components::{
-    app_logo, checkbox_box, destructive_button, destructive_subtle_button, empty_state, h_divider,
-    inset_group, page_header, search_bar, secondary_button, segmented_control, status_dot,
+    app_logo, checkbox_box, clean_list, destructive_button, destructive_subtle_button, empty_state,
+    h_divider, hover_row, page_header, search_bar, secondary_button, segmented_control, status_dot,
 };
 use crate::ui::icons;
 use crate::ui::motion;
@@ -130,11 +130,11 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         }
     }
 
-    let mut body = column![].spacing(8).padding(Padding {
-        top: 12.0 + app.motion.tab_offset_y(),
-        right: 24.0,
+    let mut body = column![].spacing(6).padding(Padding {
+        top: 10.0 + app.motion.tab_offset_y(),
+        right: 20.0,
         bottom: 24.0,
-        left: 24.0,
+        left: 20.0,
     });
 
     if filtered.is_empty() {
@@ -145,7 +145,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             "",
         ));
     } else {
-        // Quiet Finder/Linear table column header
         let col_header = container(
             row![
                 Space::new().width(Length::Fixed(56.0)),
@@ -171,14 +170,14 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             .spacing(12)
             .align_y(Vertical::Center),
         )
-        .padding([0, 14]);
+        .padding([0, 12]);
 
         let rows: Vec<Element<'a, Message>> = filtered
             .into_iter()
             .map(|inst| view_installed_row(app, inst, p))
             .collect();
 
-        body = body.push(col_header).push(inset_group(p, rows));
+        body = body.push(col_header).push(clean_list(rows));
     }
 
     let scroll = scrollable(body)
@@ -192,6 +191,9 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
 
 fn view_installed_row<'a>(app: &'a App, inst: &'a InstalledApp, p: Palette) -> Element<'a, Message> {
     let selected = app.selected_uninstall_ids.contains(&inst.id);
+    let hkey = format!("uninst_{}", inst.id);
+    let ht = app.motion.hover_level(&hkey);
+
     let size_str = if inst.estimated_size_bytes > 0 {
         format_bytes(inst.estimated_size_bytes)
     } else {
@@ -241,8 +243,8 @@ fn view_installed_row<'a>(app: &'a App, inst: &'a InstalledApp, p: Palette) -> E
         .align_y(Vertical::Center),
     )
     .width(Length::Fill)
-    .padding([9, 14])
-    .style(theme::btn_list_row(p, selected))
+    .padding([9, 12])
+    .style(theme::btn_transparent(p))
     .on_press(Message::ToggleUninstallSelection(inst.id.clone()));
 
     let details_btn = button(icons::info(14.0, p.text_muted))
@@ -250,9 +252,16 @@ fn view_installed_row<'a>(app: &'a App, inst: &'a InstalledApp, p: Palette) -> E
         .style(theme::btn_ghost(p))
         .on_press(Message::OpenInstalledDetails(inst.clone()));
 
-    row![row_btn, details_btn]
-        .align_y(Vertical::Center)
-        .into()
+    hover_row(
+        p,
+        ht,
+        selected,
+        Message::HoverEnter(hkey.clone()),
+        Message::HoverExit(hkey),
+        row![row_btn, details_btn]
+            .align_y(Vertical::Center)
+            .into(),
+    )
 }
 
 fn view_trace_review<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
@@ -353,11 +362,11 @@ fn view_trace_review<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         left: 24.0,
     });
 
-    let mut body = column![].spacing(10).padding(Padding {
-        top: 14.0,
-        right: 24.0,
+    let mut body = column![].spacing(8).padding(Padding {
+        top: 12.0,
+        right: 20.0,
         bottom: 24.0,
-        left: 24.0,
+        left: 20.0,
     });
 
     if app.traces_scanning {
@@ -379,6 +388,8 @@ fn view_trace_review<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
             .detected_traces
             .iter()
             .map(|trace| {
+                let hkey = format!("tr_{}", trace.id);
+                let ht = app.motion.hover_level(&hkey);
                 let (kind_icon, kind_lbl): (Element<'a, Message>, &str) = match trace.kind {
                     TraceKind::Directory => (icons::folder(14.0, p.accent).into(), "Folder"),
                     TraceKind::File => (icons::hard_drive(14.0, p.text_secondary).into(), "File"),
@@ -402,7 +413,7 @@ fn view_trace_review<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                     "—".into()
                 };
 
-                button(
+                let btn = button(
                     row![
                         checkbox_box(trace.selected, p),
                         kind_icon,
@@ -428,14 +439,22 @@ fn view_trace_review<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                     .align_y(Vertical::Center),
                 )
                 .width(Length::Fill)
-                .padding([9, 14])
-                .style(theme::btn_list_row(p, trace.selected))
-                .on_press(Message::ToggleTrace(trace.id))
-                .into()
+                .padding([9, 12])
+                .style(theme::btn_transparent(p))
+                .on_press(Message::ToggleTrace(trace.id));
+
+                hover_row(
+                    p,
+                    ht,
+                    false,
+                    Message::HoverEnter(hkey.clone()),
+                    Message::HoverExit(hkey),
+                    btn.into(),
+                )
             })
             .collect();
 
-        body = body.push(inset_group(p, rows));
+        body = body.push(clean_list(rows));
     }
 
     let scroll = scrollable(body)

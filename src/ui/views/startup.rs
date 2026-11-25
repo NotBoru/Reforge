@@ -1,7 +1,8 @@
 use crate::app::{App, Message};
 use crate::i18n::tr;
 use crate::ui::components::{
-    app_logo, empty_state, h_divider, inset_group, page_header, search_bar, secondary_button,
+    app_logo, clean_list, empty_state, h_divider, hover_row, page_header, search_bar,
+    secondary_button,
 };
 use crate::ui::icons;
 use crate::ui::theme::{self, Palette, FONT_MEDIUM, FONT_REGULAR, FONT_SEMIBOLD};
@@ -64,9 +65,9 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
 
     let mut body = column![].spacing(10).padding(Padding {
         top: 12.0 + app.motion.tab_offset_y(),
-        right: 24.0,
+        right: 20.0,
         bottom: 24.0,
-        left: 24.0,
+        left: 20.0,
     });
 
     if filtered.is_empty() {
@@ -80,11 +81,13 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         let rows: Vec<Element<'a, Message>> = filtered
             .into_iter()
             .map(|item| {
-                let cmd_short: String = if item.command.chars().count() > 76 {
-                    format!("{}...", item.command.chars().take(76).collect::<String>())
+                let cmd_short: String = if item.command.chars().count() > 74 {
+                    format!("{}...", item.command.chars().take(74).collect::<String>())
                 } else {
                     item.command.clone()
                 };
+                let hkey = format!("st_{}", item.id);
+                let ht = app.motion.hover_level(&hkey);
 
                 let mut name_row = row![text(&item.name)
                     .font(FONT_SEMIBOLD)
@@ -96,7 +99,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                     name_row = name_row.push(icons::lock(11.5, p.text_muted));
                 }
 
-                container(
+                let inner = container(
                     row![
                         app_logo(app.startup_icon(&item.id), &item.name, 26.0, p),
                         column![
@@ -127,12 +130,20 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                     .spacing(12)
                     .align_y(Vertical::Center),
                 )
-                .padding([10, 14])
-                .into()
+                .padding([9, 14]);
+
+                hover_row(
+                    p,
+                    ht,
+                    false,
+                    Message::HoverEnter(hkey.clone()),
+                    Message::HoverExit(hkey),
+                    inner.into(),
+                )
             })
             .collect();
 
-        body = body.push(inset_group(p, rows));
+        body = body.push(clean_list(rows));
     }
 
     let scroll = scrollable(body)

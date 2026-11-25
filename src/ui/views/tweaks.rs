@@ -2,24 +2,22 @@ use crate::app::{App, Message};
 use crate::core::tweaks::{SystemTweak, TweakCategory};
 use crate::i18n::{tr, Lang};
 use crate::ui::components::{
-    h_divider, inset_group, page_header, primary_button, secondary_button, section_heading,
-    segmented_control,
+    clean_list, h_divider, hover_row, page_header, primary_button, secondary_button,
+    section_heading, segmented_control,
 };
 use crate::ui::icons;
 use crate::ui::theme::{self, Palette, FONT_MEDIUM, FONT_REGULAR};
 use iced::alignment::Vertical;
 use iced::widget::{column, container, row, scrollable, text, toggler, Space};
-use iced::{Color, Element, Length, Padding};
+use iced::{Element, Length, Padding};
 
 fn cat_name(cat: TweakCategory, lang: Lang) -> &'static str {
     let s = tr(lang);
     match cat {
-        TweakCategory::Privacy => s.tweak_privacy,
         TweakCategory::Performance => s.tweak_performance,
         TweakCategory::Gaming => s.tweak_gaming,
-        TweakCategory::Explorer => s.tweak_explorer,
-        TweakCategory::PowerAndSystem => s.tweak_power,
-        TweakCategory::Maintenance => s.tweak_maintenance,
+        TweakCategory::Network => s.tweak_network,
+        TweakCategory::PrivacyAndEssentials => s.tweak_essentials,
     }
 }
 
@@ -36,7 +34,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         primary_button(
             p,
             s.apply_recommended.into(),
-            Some(icons::sparkles(13.0, Color::WHITE).into()),
+            Some(icons::sparkles(13.0, p.accent_fg).into()),
             Some(Message::PromptTweaksConfirm(true)),
         ),
     ]
@@ -54,11 +52,6 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 Message::TweakFilterChanged(None),
             ),
             (
-                s.tweak_privacy,
-                app.tweak_filter == Some(TweakCategory::Privacy),
-                Message::TweakFilterChanged(Some(TweakCategory::Privacy)),
-            ),
-            (
                 s.tweak_performance,
                 app.tweak_filter == Some(TweakCategory::Performance),
                 Message::TweakFilterChanged(Some(TweakCategory::Performance)),
@@ -69,19 +62,14 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 Message::TweakFilterChanged(Some(TweakCategory::Gaming)),
             ),
             (
-                s.tweak_explorer,
-                app.tweak_filter == Some(TweakCategory::Explorer),
-                Message::TweakFilterChanged(Some(TweakCategory::Explorer)),
+                s.tweak_network,
+                app.tweak_filter == Some(TweakCategory::Network),
+                Message::TweakFilterChanged(Some(TweakCategory::Network)),
             ),
             (
-                s.tweak_power,
-                app.tweak_filter == Some(TweakCategory::PowerAndSystem),
-                Message::TweakFilterChanged(Some(TweakCategory::PowerAndSystem)),
-            ),
-            (
-                s.tweak_maintenance,
-                app.tweak_filter == Some(TweakCategory::Maintenance),
-                Message::TweakFilterChanged(Some(TweakCategory::Maintenance)),
+                s.tweak_essentials,
+                app.tweak_filter == Some(TweakCategory::PrivacyAndEssentials),
+                Message::TweakFilterChanged(Some(TweakCategory::PrivacyAndEssentials)),
             ),
         ],
     );
@@ -107,12 +95,11 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
         left: 24.0,
     });
 
-    // macOS System Settings grouped sections — ZERO inline pill confetti!
     let mut body = column![].spacing(18).padding(Padding {
         top: 14.0 + app.motion.tab_offset_y(),
-        right: 24.0,
+        right: 20.0,
         bottom: 24.0,
-        left: 24.0,
+        left: 20.0,
     });
 
     for &cat in TweakCategory::ALL {
@@ -135,6 +122,8 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                     Lang::En => (tweak.name_en, tweak.desc_en),
                     Lang::PtBr => (tweak.name_pt, tweak.desc_pt),
                 };
+                let hkey = format!("twk_{:?}", tweak.id);
+                let ht = app.motion.hover_level(&hkey);
 
                 let mut title_line = row![text(name)
                     .font(FONT_MEDIUM)
@@ -148,7 +137,7 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                 }
 
                 let id = tweak.id;
-                container(
+                let inner = container(
                     row![
                         column![
                             title_line,
@@ -167,17 +156,25 @@ pub fn view<'a>(app: &'a App, p: Palette) -> Element<'a, Message> {
                     .spacing(16)
                     .align_y(Vertical::Center),
                 )
-                .padding([11, 16])
-                .into()
+                .padding([10, 14]);
+
+                hover_row(
+                    p,
+                    ht,
+                    false,
+                    Message::HoverEnter(hkey.clone()),
+                    Message::HoverExit(hkey),
+                    inner.into(),
+                )
             })
             .collect();
 
         body = body.push(
             column![
                 section_heading(p, cat_name(cat, app.config.lang), Some(meta)),
-                inset_group(p, rows),
+                clean_list(rows),
             ]
-            .spacing(2),
+            .spacing(4),
         );
     }
 

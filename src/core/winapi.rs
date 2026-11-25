@@ -175,8 +175,8 @@ pub fn verify_authenticode_signature(path: &std::path::Path) -> bool {
     status == 0
 }
 
-/// Synchronizes the native Windows 10/11 title bar with Reforge's active Dark/Light theme.
-pub fn apply_dwm_titlebar_theme(dark: bool) {
+/// Synchronizes the native Windows 10/11 title bar with Reforge's active theme & caption color.
+pub fn apply_dwm_titlebar_theme(dark: bool, rgb: (u8, u8, u8)) {
     use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
@@ -217,11 +217,7 @@ pub fn apply_dwm_titlebar_theme(dark: bool) {
     }
 
     // COLORREF is 0x00BBGGRR
-    let caption_color: u32 = if dark {
-        0x0016_1211 // #111216 (matches sidebar/canvas obsidian)
-    } else {
-        0x00F5_F2F0 // #F0F2F5 (matches light sidebar)
-    };
+    let caption_color: u32 = ((rgb.2 as u32) << 16) | ((rgb.1 as u32) << 8) | (rgb.0 as u32);
 
     let payload = Payload {
         pid: unsafe { GetCurrentProcessId() },
